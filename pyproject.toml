@@ -1,0 +1,91 @@
+[project]
+name = "barber-platform"
+version = "0.1.0"
+description = "Online booking platform for barbershops: monorepo root"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "ruff==0.16.5",
+    "mypy==2.3.1",
+    "pytest==9.1.1",
+    "pytest-asyncio==1.4.0",
+    "pytest-cov==7.1.0",
+    "testcontainers[postgres]==4.15.0",
+    "httpx==0.28.1",
+    "pre-commit==4.6.2",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["libs/*", "services/*"]
+
+# ---------------------------------------------------------------------------
+# ruff
+# ---------------------------------------------------------------------------
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["libs/common/src", "services"]
+extend-exclude = ["**/migrations/versions"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "S", "ASYNC", "DTZ"]
+# ANN401 is the check behind "Any is forbidden": mypy cannot enforce it, because
+# the pydantic plugin synthesises __init__ signatures that mention Any.
+extend-select = ["ANN401"]
+# N818 wants every exception to end in "Error". Domain errors are named after the
+# fact they report -- SlotAlreadyTaken, CancelDeadlinePassed -- which reads at the
+# call site and is fixed in docs/CODING_STANDARDS.md section 6.
+ignore = ["N818"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests assert, use throwaway credentials and bind to localhost by design.
+"**/tests/**" = ["S101", "S105", "S106", "S311"]
+# Alembic environment files follow the upstream template.
+"**/migrations/**" = ["I001"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["barber_common"]
+
+[tool.ruff.format]
+docstring-code-format = true
+
+# ---------------------------------------------------------------------------
+# mypy
+# ---------------------------------------------------------------------------
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+plugins = ["pydantic.mypy"]
+mypy_path = ["libs/common/src"]
+exclude = ["(^|/)migrations/versions/"]
+
+[[tool.mypy.overrides]]
+module = ["*.migrations.*", "*.tests.*", "tests.*", "conftest"]
+disallow_untyped_defs = false
+disallow_untyped_decorators = false
+
+[[tool.mypy.overrides]]
+module = ["testcontainers.*", "docker.*"]
+ignore_missing_imports = true
+
+# ---------------------------------------------------------------------------
+# pytest
+# ---------------------------------------------------------------------------
+
+[tool.pytest.ini_options]
+addopts = "--strict-markers --strict-config"
+testpaths = ["libs", "services", "tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "integration: needs a running Docker daemon (testcontainers)",
+]

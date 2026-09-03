@@ -1,0 +1,70 @@
+.DEFAULT_GOAL := help
+SHELL := /bin/bash
+
+UV ?= uv
+COMPOSE_FILE := deploy/compose/docker-compose.yml
+COMPOSE := docker compose -f $(COMPOSE_FILE)
+
+.PHONY: help sync hooks check lint format type test test-unit up down logs migrate seed kind-up kind-down clean
+
+help: ## Show available commands
+	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
+		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
+
+sync: ## Create or update the virtual environment from the lock file
+	$(UV) sync --all-packages
+
+hooks: ## Install the git hooks of pre-commit
+	$(UV) run pre-commit install
+
+check: ## Run every pre-commit hook over the whole repository
+	$(UV) run pre-commit run --all-files
+
+lint: ## Static style checks
+	$(UV) run ruff check .
+	$(UV) run ruff format --check .
+
+format: ## Rewrite files to the project style
+	$(UV) run ruff check --fix .
+	$(UV) run ruff format .
+
+type: ## Static type checks
+	$(UV) run mypy .
+
+test: ## Run the whole test suite
+	@$(UV) run pytest; status=$$?; test $$status -eq 0 -o $$status -eq 5
+
+test-unit: ## Run only the tests that need no Docker
+	@$(UV) run pytest -m "not integration"; status=$$?; test $$status -eq 0 -o $$status -eq 5
+
+up: ## Start the local environment
+	@test -f $(COMPOSE_FILE) || { echo "$(COMPOSE_FILE) appears in T0.17"; exit 1; }
+	$(COMPOSE) up -d --build
+
+down: ## Stop the local environment
+	@test -f $(COMPOSE_FILE) || { echo "$(COMPOSE_FILE) appears in T0.17"; exit 1; }
+	$(COMPOSE) down -v
+
+logs: ## Follow the local environment logs
+	@test -f $(COMPOSE_FILE) || { echo "$(COMPOSE_FILE) appears in T0.17"; exit 1; }
+	$(COMPOSE) logs -f
+
+migrate: ## Apply database migrations of every service
+	@test -x scripts/migrate.sh || { echo "scripts/migrate.sh appears in T0.14"; exit 1; }
+	./scripts/migrate.sh
+
+seed: ## Load demo data into the local environment
+	@test -x scripts/seed.sh || { echo "scripts/seed.sh appears in T8.1"; exit 1; }
+	./scripts/seed.sh
+
+kind-up: ## Create the kind cluster and install the Helm releases
+	@test -x scripts/kind-up.sh || { echo "scripts/kind-up.sh appears in T6.1"; exit 1; }
+	./scripts/kind-up.sh
+
+kind-down: ## Delete the kind cluster
+	@test -x scripts/kind-down.sh || { echo "scripts/kind-down.sh appears in T6.1"; exit 1; }
+	./scripts/kind-down.sh
+
+clean: ## Remove build and test artefacts
+	find . -type d -name __pycache__ -prune -exec rm -rf {} +
+	rm -rf .pytest_cache .mypy_cache .ruff_cache .coverage htmlcov
