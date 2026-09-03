@@ -1,0 +1,55 @@
+# Runs the same checks as CI, on the files of a commit.
+# Install once per clone: make hooks
+minimum_pre_commit_version: "4.0.0"
+default_install_hook_types: [pre-commit, commit-msg]
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-added-large-files
+      - id: check-case-conflict
+      - id: check-merge-conflict
+      - id: check-toml
+      - id: check-yaml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      # A private key in the history cannot be taken back: rotation is the only fix.
+      - id: detect-private-key
+      # Trunk-based development: a task goes to a branch and comes back as a PR.
+      - id: no-commit-to-branch
+        args: [--branch, main, --branch, master]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.5
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+
+  # Conventional Commits are a rule of docs/CODING_STANDARDS.md section 15, so
+  # they are checked rather than hoped for.
+  - repo: https://github.com/commitizen-tools/commitizen
+    rev: v4.18.0
+    hooks:
+      - id: commitizen
+        stages: [commit-msg]
+
+  - repo: local
+    hooks:
+      # mypy sees the whole project: checking a subset of files reports errors
+      # that do not exist and misses the ones that do.
+      - id: mypy
+        name: mypy
+        entry: uv run mypy .
+        language: system
+        types: [python]
+        pass_filenames: false
+
+      - id: env-file-is-not-committed
+        name: no .env in the repository
+        entry: scripts/check-secrets.sh
+        language: script
+        pass_filenames: false
