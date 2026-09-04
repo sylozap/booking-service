@@ -36,10 +36,33 @@ make test-unit
 
 Полный список команд — `make help`.
 
+## Локальный стенд
+
+```bash
+make up       # PostgreSQL, Redis, Kafka, миграции и пять сервисов
+make logs     # логи стенда
+make down     # остановить и удалить тома
+```
+
+Проверка после `make up`:
+
+```bash
+curl localhost:8000/health/ready   # api-gateway
+curl localhost:8003/health/ready   # booking, вместе с проверкой БД
+```
+
+Порты: api-gateway `8000`, auth `8001`, catalog `8002`, booking `8003`,
+notification `8004`. Исходники смонтированы в контейнеры — правка файла
+перезапускает сервис без пересборки образа.
+
+Миграции применяются одноразовыми контейнерами `<service>-migrate` при подъёме
+стенда; вручную — `make migrate`. Профиль наблюдаемости (`make up-obs`) пока
+пустой и наполняется на Э7.
+
 ## Структура
 
 ```
-libs/common/          # шасси barber_common: конфиг, логи, ошибки, БД, health
+libs/common/          # шасси barber_common: конфиг, логи, ошибки, БД, Kafka, health
 services/             # api-gateway, auth, catalog, booking, notification
 deploy/compose/       # локальная инфраструктура
 deploy/helm/          # общий chart и values на каждый сервис
@@ -63,5 +86,8 @@ cp .env.example .env
 
 ## Состояние
 
-Этап Э0 «Фундамент», задачи T0.1–T0.6: workspace, конфигурация, логирование,
-ошибки RFC 9457, слой базы данных, health-check.
+Этап Э0 «Фундамент» завершён, задачи T0.1–T0.18: workspace, конфигурация,
+логирование, ошибки RFC 9457, слой базы данных, health-check, метрики,
+трассировка, фабрика приложения, HTTP-клиент, продюсер и конверт события,
+outbox с relay, консьюмер с дедупликацией и DLQ, шаблон Alembic и общие
+миграции, тестовая инфраструктура, пять сервисов, docker-compose и CI.

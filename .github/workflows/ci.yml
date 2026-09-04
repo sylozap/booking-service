@@ -1,0 +1,161 @@
+# The pipeline that decides whether a branch may be merged.
+#
+# It runs exactly what "make lint type test" runs locally: a check that exists
+# only in CI is a check developers learn to discover from a red pipeline, and
+# one that exists only locally is a check that stops running.
+#
+# Images are built for the services a pull request actually touched, and pushed
+# only from the default branch, tagged by commit SHA -- a tag that says which
+# code is running and makes a rollback an exact operation (docs/10).
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  # A new push to a branch cancels the run of the previous one: the answer
+  # about a commit nobody will merge is not worth a runner.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_VERSION: "0.12.8"
+  PYTHON_VERSION: "3.12"
+  REGISTRY: ghcr.io
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - run: uv sync --all-packages --frozen
+
+      - name: ruff check
+        run: uv run ruff check .
+
+      - name: ruff format
+        run: uv run ruff format --check .
+
+  types:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - run: uv sync --all-packages --frozen
+
+      # The same two passes as "make type": mypy cannot see five files named
+      # tests/test_smoke.py in one run, so the service tests go one at a time.
+      - name: mypy
+        run: uv run mypy .
+
+      - name: mypy over the service tests
+        run: |
+          for tests in services/*/tests; do
+            echo "==> $tests"
+            uv run mypy --config-file=mypy.tests.toml "$tests"
+          done
+
+  test:
+    # ubuntu-latest has a Docker daemon, which testcontainers needs: the
+    # integration tests run against a real PostgreSQL, Redis and Kafka.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - run: uv sync --all-packages --frozen
+
+      - name: pytest
+        run: uv run pytest --cov=libs/common/src --cov=services --cov-report=term-missing
+
+  changes:
+    # Which services a change touched, so the build below is not five images
+    # every time somebody edits a docstring.
+    runs-on: ubuntu-latest
+    outputs:
+      services: ${{ steps.filter.outputs.changes }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            api-gateway:
+              - 'services/api-gateway/**'
+              - 'libs/common/**'
+              - 'uv.lock'
+            auth:
+              - 'services/auth/**'
+              - 'libs/common/**'
+              - 'uv.lock'
+            catalog:
+              - 'services/catalog/**'
+              - 'libs/common/**'
+              - 'uv.lock'
+            booking:
+              - 'services/booking/**'
+              - 'libs/common/**'
+              - 'uv.lock'
+            notification:
+              - 'services/notification/**'
+              - 'libs/common/**'
+              - 'uv.lock'
+
+  build:
+    needs: [lint, types, test, changes]
+    if: needs.changes.outputs.services != '[]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJSON(needs.changes.outputs.services) }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        # Only the default branch publishes: a pull request image would be a
+        # tag nobody deploys and nobody deletes.
+        if: github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build ${{ matrix.service }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: services/${{ matrix.service }}/Dockerfile
+          push: ${{ github.ref == 'refs/heads/main' }}
+          # The SHA and nothing else: "latest" makes two clusters run different
+          # code under one name, and a rollback becomes guesswork.
+          tags: ${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.service }}:${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
