@@ -12,6 +12,8 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
 
+from opentelemetry import trace
+
 __all__ = [
     "CONTEXT_FIELDS",
     "bind_context",
@@ -58,13 +60,37 @@ def set_trace_context(*, trace_id: str | None, span_id: str | None) -> None:
     _span_id.set(span_id)
 
 
+def _current_span_context() -> tuple[str, str] | None:
+    """Return the ids of the span being executed, if tracing is recording.
+
+    While the exporter is off, OpenTelemetry hands out a non-recording span with
+    an invalid context, and the log fields stay ``null``.
+    """
+    span_context = trace.get_current_span().get_span_context()
+    if not span_context.is_valid:
+        return None
+    return (
+        trace.format_trace_id(span_context.trace_id),
+        trace.format_span_id(span_context.span_id),
+    )
+
+
 def current_context() -> dict[str, str | None]:
     """Return every context field, using ``None`` for the ones not set.
 
     Fields are always present: a missing key in a log record is harder to query
     in Loki than an explicit ``null``.
+
+    The trace fields are read from OpenTelemetry rather than stored, so a log
+    record names the span that actually produced it. A consumer restoring the
+    context of a message from Kafka headers, where no span is being recorded,
+    falls back to the values set through :func:`set_trace_context`.
     """
-    return {name: variable.get() for name, variable in _VARIABLES.items()}
+    values = {name: variable.get() for name, variable in _VARIABLES.items()}
+    span_context = _current_span_context()
+    if span_context is not None:
+        values["trace_id"], values["span_id"] = span_context
+    return values
 
 
 @contextmanager

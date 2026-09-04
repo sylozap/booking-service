@@ -66,6 +66,20 @@ class HealthRegistry:
 
     def __init__(self) -> None:
         self._checks: dict[str, HealthCheck] = {}
+        self._is_draining = False
+
+    @property
+    def is_draining(self) -> bool:
+        return self._is_draining
+
+    def start_draining(self) -> None:
+        """Report not ready from now on, while still serving what is in flight.
+
+        Called on SIGTERM before the requests are drained: Kubernetes removes
+        the pod from the endpoints of the Service and from the load balancer
+        only after a readiness probe fails.
+        """
+        self._is_draining = True
 
     def register(self, name: str, check: HealthCheck) -> None:
         """Add a check. A repeated name is a mistake, not an override."""
@@ -135,6 +149,10 @@ def create_health_router(registry: HealthRegistry, *, timeout_seconds: float = 2
     @router.get("/health/ready")
     async def ready(response: Response) -> dict[str, object]:
         """Answer whether this instance can serve traffic right now."""
+        if registry.is_draining:
+            response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+            return {"status": "draining", "checks": []}
+
         outcomes = await registry.run(timeout_seconds=timeout_seconds)
         failed = [outcome for outcome in outcomes if not outcome.is_healthy]
 
