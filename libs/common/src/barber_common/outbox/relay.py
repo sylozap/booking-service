@@ -72,6 +72,12 @@ class OutboxRelay:
                 await self._report(repository)
                 return 0
 
+            # The connection to the broker is made here rather than in the
+            # lifespan of the service. A broker that is down at startup must
+            # delay events, not stop the service (docs/08-consistency.md); the
+            # call is idempotent, so every later pass costs nothing.
+            await self._producer.start()
+
             for message in messages:
                 await self._publish(message)
 
