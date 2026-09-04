@@ -1,0 +1,19 @@
+[project]
+name = "barber-gateway"
+version = "0.1.0"
+description = "Barber API Gateway"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "barber-common",
+    "uvicorn[standard]==0.52.4",
+]
+
+[tool.uv.sources]
+barber-common = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/barber_gateway"]

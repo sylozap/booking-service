@@ -13,7 +13,7 @@ dev = [
     "pytest==9.1.1",
     "pytest-asyncio==1.4.0",
     "pytest-cov==7.1.0",
-    "testcontainers[postgres]==4.15.0",
+    "testcontainers[postgres,redis]==4.15.0",
     "httpx==0.28.1",
     "pre-commit==4.6.2",
 ]
@@ -51,7 +51,14 @@ ignore = ["N818"]
 "**/migrations/**" = ["I001"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["barber_common"]
+known-first-party = [
+    "barber_common",
+    "barber_auth",
+    "barber_booking",
+    "barber_catalog",
+    "barber_gateway",
+    "barber_notification",
+]
 
 [tool.ruff.format]
 docstring-code-format = true
@@ -66,7 +73,11 @@ strict = true
 warn_unreachable = true
 plugins = ["pydantic.mypy"]
 mypy_path = ["libs/common/src"]
-exclude = ["(^|/)migrations/versions/"]
+# mypy maps a file to a module by its name, and this layout has the same name
+# more than once: every service has a migrations/env.py and a tests/test_smoke.py.
+# The migrations are excluded outright; the tests of the services are checked
+# one service at a time -- see the "type" target of the Makefile.
+exclude = ["(^|/)migrations/", "^services/[^/]+/tests/"]
 
 [[tool.mypy.overrides]]
 module = ["*.migrations.*", "*.tests.*", "tests.*", "conftest"]
@@ -83,7 +94,9 @@ ignore_missing_imports = true
 # ---------------------------------------------------------------------------
 
 [tool.pytest.ini_options]
-addopts = "--strict-markers --strict-config"
+# importlib: five services have a tests/test_smoke.py, and the legacy import
+# mode derives the module name from the file name, so they collide.
+addopts = "--strict-markers --strict-config --import-mode=importlib"
 testpaths = ["libs", "services", "tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
