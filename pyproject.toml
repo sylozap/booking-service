@@ -74,7 +74,8 @@ disallow_untyped_defs = false
 disallow_untyped_decorators = false
 
 [[tool.mypy.overrides]]
-module = ["testcontainers.*", "docker.*"]
+# Neither ships a py.typed marker.
+module = ["testcontainers.*", "docker.*", "aiokafka.*"]
 ignore_missing_imports = true
 
 # ---------------------------------------------------------------------------
