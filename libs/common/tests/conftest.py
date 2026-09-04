@@ -1,55 +1,80 @@
-"""Fixtures shared by the chassis tests."""
+"""Fixtures of the chassis tests.
+
+The database of these tests is created once per session and brought up by the
+real migrations -- the same reusable revision every service uses. Nothing here
+builds a schema from the models: a schema that never went through Alembic
+leaves the migrations untested until the first deployment.
+"""
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import AsyncIterator
+from pathlib import Path
 
-import docker
 import pytest
-from docker.errors import DockerException
-from testcontainers.community.kafka import KafkaContainer
-from testcontainers.community.postgres import PostgresContainer
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from barber_common.config import BaseAppSettings, Environment
+from barber_common.db import Database, create_engine
+from barber_common.testing.fixtures import (
+    apply_migrations,
+    create_database,
+    isolated_session_factory,
+)
 
-POSTGRES_IMAGE = "postgres:17-alpine"
-# The default image of testcontainers, pinned so a pull never surprises CI.
-KAFKA_IMAGE = "confluentinc/cp-kafka:7.6.0"
+ALEMBIC_INI = Path(__file__).parent / "alembic.ini"
+DATABASE_NAME = "chassis_test"
+
+# Everything the shared revision creates. Truncated between the tests that
+# commit for real; the rest are isolated by a rollback and need no cleaning.
+SHARED_TABLES = ("outbox", "processed_events")
 
 
-def _docker_is_available() -> bool:
-    """Report whether a Docker daemon answers on this machine.
+@pytest.fixture(scope="session")
+def chassis_dsn(postgres_dsn: str) -> str:
+    """A database of its own for the chassis suite, migrated to head."""
+    dsn = create_database(postgres_dsn, DATABASE_NAME)
+    apply_migrations(dsn=dsn, alembic_ini=ALEMBIC_INI)
+    return dsn
 
-    Integration tests are skipped instead of failing when it does not: a laptop
-    without Docker must still be able to run the unit tests. CI has Docker, so
-    the tests do run where it matters.
+
+@pytest.fixture
+async def engine(chassis_dsn: str) -> AsyncIterator[AsyncEngine]:
+    engine = create_engine(chassis_dsn, pool_size=5, max_overflow=5)
+
+    yield engine
+
+    await engine.dispose()
+
+
+@pytest.fixture
+async def session_factory(engine: AsyncEngine) -> AsyncIterator[async_sessionmaker[AsyncSession]]:
+    """Sessions whose writes are rolled back when the test ends.
+
+    The default. A test that needs two transactions at the same time -- the
+    ``SKIP LOCKED`` test does -- takes ``concurrent_session_factory`` instead,
+    because savepoints on one connection are not two transactions.
     """
-    try:
-        docker.from_env().ping()
-    except (DockerException, OSError):
-        return False
-    return True
+    async with isolated_session_factory(engine) as factory:
+        yield factory
 
 
-@pytest.fixture(scope="session")
-def postgres_dsn() -> Iterator[str]:
-    """Start PostgreSQL once per session and hand out its async DSN."""
-    if not _docker_is_available():
-        pytest.skip("Docker is not available, integration tests need testcontainers")
+@pytest.fixture
+async def concurrent_session_factory(
+    engine: AsyncEngine,
+) -> AsyncIterator[async_sessionmaker[AsyncSession]]:
+    """Sessions on connections of their own, cleaned up by truncating."""
+    await _truncate(engine)
 
-    with PostgresContainer(POSTGRES_IMAGE, driver="asyncpg") as container:
-        yield container.get_connection_url()
+    yield Database(engine).session_factory
+
+    await _truncate(engine)
 
 
-@pytest.fixture(scope="session")
-def kafka_bootstrap() -> Iterator[str]:
-    """Start Kafka once per session and hand out its bootstrap address."""
-    if not _docker_is_available():
-        pytest.skip("Docker is not available, integration tests need testcontainers")
-
-    # KRaft, the same mode the platform runs in: no ZooKeeper anywhere.
-    with KafkaContainer(KAFKA_IMAGE).with_kraft() as container:
-        yield str(container.get_bootstrap_server())
+async def _truncate(engine: AsyncEngine) -> None:
+    async with engine.begin() as connection:
+        await connection.execute(text(f"TRUNCATE {', '.join(SHARED_TABLES)}"))
 
 
 @pytest.fixture

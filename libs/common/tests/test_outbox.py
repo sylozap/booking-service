@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from uuid import UUID, uuid4
 
@@ -10,9 +9,8 @@ import pytest
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
-from sqlalchemy.schema import CreateTable, DropTable
 
-from barber_common.db import Database, create_engine, unit_of_work
+from barber_common.db import unit_of_work
 from barber_common.events.envelope import EventEnvelope
 from barber_common.kafka.producer import EventProducer
 from barber_common.outbox.models import OutboxMessage
@@ -27,6 +25,20 @@ TOPIC = "booking.bookings.v1"
 class BookingCreated(BaseModel):
     booking_id: UUID
     master_id: UUID
+
+
+@pytest.fixture
+def session_factory(
+    concurrent_session_factory: async_sessionmaker[AsyncSession],
+) -> async_sessionmaker[AsyncSession]:
+    """Real connections instead of the rollback isolation of the suite.
+
+    Every test here is about what another connection sees: whether a rolled
+    back transaction left a row, whether a second relay can claim what the
+    first one holds. Sessions sharing one connection would answer all of that
+    with "yes" and prove nothing.
+    """
+    return concurrent_session_factory
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,6 +64,9 @@ class RecordingProducer(EventProducer):
 
     def __init__(self, *, fail_times: int = 0) -> None:
         self.producer_name = "booking@test"
+        # There is no broker behind this one, so it is born started: the relay
+        # connects before publishing and would otherwise reach into aiokafka.
+        self._is_started = True
         self.published: list[PublishedEvent] = []
         self._fail_times = fail_times
 
@@ -73,26 +88,6 @@ class RecordingProducer(EventProducer):
         if self._fail_times > 0:
             self._fail_times -= 1
             raise PublishFailed
-
-
-@pytest.fixture
-async def engine(postgres_dsn: str) -> AsyncIterator[AsyncEngine]:
-    engine = create_engine(postgres_dsn, pool_size=5, max_overflow=5)
-    # The shared Alembic revision that owns this table arrives in T0.14; until
-    # then the table is created from the model for this test only.
-    async with engine.begin() as connection:
-        table = OutboxMessage.metadata.tables[OutboxMessage.__tablename__]
-        await connection.execute(DropTable(table, if_exists=True))
-        await connection.execute(CreateTable(table))
-
-    yield engine
-
-    await engine.dispose()
-
-
-@pytest.fixture
-def session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
-    return Database(engine).session_factory
 
 
 def booking_event() -> BookingCreated:
