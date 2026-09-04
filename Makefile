@@ -3,9 +3,11 @@ SHELL := /bin/bash
 
 UV ?= uv
 COMPOSE_FILE := deploy/compose/docker-compose.yml
+COMPOSE_OBS_FILE := deploy/compose/docker-compose.obs.yml
 COMPOSE := docker compose -f $(COMPOSE_FILE)
+COMPOSE_WITH_OBS := docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OBS_FILE)
 
-.PHONY: help sync hooks check lint format type test test-unit up down logs migrate seed kind-up kind-down clean
+.PHONY: help sync hooks check lint format type test test-unit up up-obs down logs migrate seed kind-up kind-down clean
 
 help: ## Show available commands
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -30,6 +32,12 @@ format: ## Rewrite files to the project style
 
 type: ## Static type checks
 	$(UV) run mypy .
+	@# mypy refuses to see two files with the same module name in one run, and
+	@# every service has a tests/test_smoke.py. They are checked one at a time.
+	@for tests in services/*/tests; do \
+		echo "==> $$tests"; \
+		$(UV) run mypy --config-file=mypy.tests.toml "$$tests"; \
+	done
 
 test: ## Run the whole test suite
 	@$(UV) run pytest; status=$$?; test $$status -eq 0 -o $$status -eq 5
@@ -40,6 +48,10 @@ test-unit: ## Run only the tests that need no Docker
 up: ## Start the local environment
 	@test -f $(COMPOSE_FILE) || { echo "$(COMPOSE_FILE) appears in T0.17"; exit 1; }
 	$(COMPOSE) up -d --build
+
+up-obs: ## Start the local environment together with the observability profile
+	@test -f $(COMPOSE_FILE) || { echo "$(COMPOSE_FILE) appears in T0.17"; exit 1; }
+	$(COMPOSE_WITH_OBS) up -d --build
 
 down: ## Stop the local environment
 	@test -f $(COMPOSE_FILE) || { echo "$(COMPOSE_FILE) appears in T0.17"; exit 1; }

@@ -1,0 +1,299 @@
+# The local environment: infrastructure plus the five services with hot reload.
+#
+# What matters here beyond convenience:
+#
+# * every service gets its own database and its own PostgreSQL role, so a
+#   cross-service query fails locally instead of in the cluster (init.sql);
+# * the migrations run as their own one-shot containers, the same shape as the
+#   Helm pre-upgrade Job, and a service starts only after its own migration
+#   finished -- the schema check in the lifespan would otherwise refuse to run;
+# * the source is mounted over the installed package, so an edit reloads the
+#   service without rebuilding the image.
+#
+# make up / make down / make logs.
+
+name: barber
+
+x-service-environment: &service-environment
+  ENVIRONMENT: local
+  LOG_LEVEL: DEBUG
+  REDIS_DSN: redis://redis:6379/0
+  KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+  OTLP_ENABLED: "false"
+
+x-service-defaults: &service-defaults
+  restart: unless-stopped
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+    kafka:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      # Runs once, when the volume is empty. Changing it means `make down`,
+      # which removes the volume, and then `make up`.
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    ports:
+      - "9092:9092"
+    environment:
+      # KRaft: one node that is both broker and controller. No ZooKeeper here
+      # and none in the cluster either (docs/10-infrastructure.md).
+      CLUSTER_ID: barber-local-cluster-1
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:29093
+      KAFKA_LISTENERS: PLAINTEXT://kafka:29092,CONTROLLER://kafka:29093,PLAINTEXT_HOST://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      # One node, so nothing can be replicated anywhere.
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      # Three partitions per topic, as in the cluster: a consumer that only ever
+      # sees one partition hides ordering mistakes until the first deployment.
+      KAFKA_NUM_PARTITIONS: 3
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+
+  auth-migrate:
+    image: barber/auth:local
+    working_dir: /app/services/auth
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      DATABASE_DSN: postgresql+asyncpg://auth:auth@postgres:5432/auth
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  catalog-migrate:
+    image: barber/catalog:local
+    working_dir: /app/services/catalog
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      DATABASE_DSN: postgresql+asyncpg://catalog:catalog@postgres:5432/catalog
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  booking-migrate:
+    image: barber/booking:local
+    working_dir: /app/services/booking
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      DATABASE_DSN: postgresql+asyncpg://booking:booking@postgres:5432/booking
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  notification-migrate:
+    image: barber/notification:local
+    working_dir: /app/services/notification
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      DATABASE_DSN: postgresql+asyncpg://notification:notification@postgres:5432/notification
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api-gateway:
+    <<: *service-defaults
+    build:
+      context: ../..
+      dockerfile: services/api-gateway/Dockerfile
+    image: barber/api-gateway:local
+    environment:
+      <<: *service-environment
+      SERVICE_NAME: api-gateway
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../../services/api-gateway/src:/app/services/api-gateway/src:ro
+      - ../../libs/common/src:/app/libs/common/src:ro
+    command:
+      - uvicorn
+      - barber_gateway.main:create_application
+      - --factory
+      - --host=0.0.0.0
+      - --port=8000
+      - --reload
+      - --reload-dir=/app/services/api-gateway/src
+      - --reload-dir=/app/libs/common/src
+
+  auth:
+    <<: *service-defaults
+    build:
+      context: ../..
+      dockerfile: services/auth/Dockerfile
+    image: barber/auth:local
+    environment:
+      <<: *service-environment
+      SERVICE_NAME: auth
+      DATABASE_DSN: postgresql+asyncpg://auth:auth@postgres:5432/auth
+    ports:
+      - "8001:8001"
+    volumes:
+      - ../../services/auth/src:/app/services/auth/src:ro
+      - ../../libs/common/src:/app/libs/common/src:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      auth-migrate:
+        condition: service_completed_successfully
+    command:
+      - uvicorn
+      - barber_auth.main:create_application
+      - --factory
+      - --host=0.0.0.0
+      - --port=8001
+      - --reload
+      - --reload-dir=/app/services/auth/src
+      - --reload-dir=/app/libs/common/src
+
+  catalog:
+    <<: *service-defaults
+    build:
+      context: ../..
+      dockerfile: services/catalog/Dockerfile
+    image: barber/catalog:local
+    environment:
+      <<: *service-environment
+      SERVICE_NAME: catalog
+      DATABASE_DSN: postgresql+asyncpg://catalog:catalog@postgres:5432/catalog
+    ports:
+      - "8002:8002"
+    volumes:
+      - ../../services/catalog/src:/app/services/catalog/src:ro
+      - ../../libs/common/src:/app/libs/common/src:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      catalog-migrate:
+        condition: service_completed_successfully
+    command:
+      - uvicorn
+      - barber_catalog.main:create_application
+      - --factory
+      - --host=0.0.0.0
+      - --port=8002
+      - --reload
+      - --reload-dir=/app/services/catalog/src
+      - --reload-dir=/app/libs/common/src
+
+  booking:
+    <<: *service-defaults
+    build:
+      context: ../..
+      dockerfile: services/booking/Dockerfile
+    image: barber/booking:local
+    environment:
+      <<: *service-environment
+      SERVICE_NAME: booking
+      DATABASE_DSN: postgresql+asyncpg://booking:booking@postgres:5432/booking
+    ports:
+      - "8003:8003"
+    volumes:
+      - ../../services/booking/src:/app/services/booking/src:ro
+      - ../../libs/common/src:/app/libs/common/src:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      booking-migrate:
+        condition: service_completed_successfully
+    command:
+      - uvicorn
+      - barber_booking.main:create_application
+      - --factory
+      - --host=0.0.0.0
+      - --port=8003
+      - --reload
+      - --reload-dir=/app/services/booking/src
+      - --reload-dir=/app/libs/common/src
+
+  notification:
+    <<: *service-defaults
+    build:
+      context: ../..
+      dockerfile: services/notification/Dockerfile
+    image: barber/notification:local
+    environment:
+      <<: *service-environment
+      SERVICE_NAME: notification
+      DATABASE_DSN: postgresql+asyncpg://notification:notification@postgres:5432/notification
+    ports:
+      - "8004:8004"
+    volumes:
+      - ../../services/notification/src:/app/services/notification/src:ro
+      - ../../libs/common/src:/app/libs/common/src:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      notification-migrate:
+        condition: service_completed_successfully
+    command:
+      - uvicorn
+      - barber_notification.main:create_application
+      - --factory
+      - --host=0.0.0.0
+      - --port=8004
+      - --reload
+      - --reload-dir=/app/services/notification/src
+      - --reload-dir=/app/libs/common/src
+
+volumes:
+  postgres-data:
+  kafka-data:
