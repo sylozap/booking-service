@@ -20,6 +20,11 @@ x-service-environment: &service-environment
   REDIS_DSN: redis://redis:6379/0
   KAFKA_BOOTSTRAP_SERVERS: kafka:29092
   OTLP_ENABLED: "false"
+  # Every service verifies the tokens it receives itself (ADR-0010): the
+  # issuer it expects, and where to fetch the public keys. auth ignores
+  # JWKS_URL -- it holds the keys already.
+  JWT_ISSUER: https://barber.local/auth
+  JWKS_URL: http://auth:8001
 
 x-service-defaults: &service-defaults
   restart: unless-stopped

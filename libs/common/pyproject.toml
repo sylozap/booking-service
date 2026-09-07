@@ -23,6 +23,12 @@ dependencies = [
     "opentelemetry-instrumentation-sqlalchemy==0.65b0",
     "opentelemetry-instrumentation-redis==0.65b0",
     "alembic==1.18.1",
+    # Verifying the access tokens auth issues. Every service checks the
+    # signature itself against the keys from JWKS rather than trusting a
+    # header the gateway set (ADR-0010), so this belongs in the chassis and
+    # not in one service. The crypto extra brings cryptography, which turns a
+    # published JWK back into a key object.
+    "pyjwt[crypto]==2.13.0",
 ]
 
 [build-system]

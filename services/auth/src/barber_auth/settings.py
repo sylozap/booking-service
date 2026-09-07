@@ -52,10 +52,8 @@ class AuthSettings(BaseAppSettings):
     jwt_private_key_path: Path | None = None
     jwt_private_key: SecretStr | None = None
 
-    # The ``iss`` claim. Verifiers check it, so it is configuration rather than
-    # a constant: the same code runs in local, dev and prod, and a token minted
-    # in one must not be accepted in another.
-    jwt_issuer: str = "https://barber.local/auth"
+    # ``jwt_issuer`` is on BaseAppSettings: auth writes the claim and every
+    # service checks it, so one setting has to be readable from both sides.
 
     # --- token lifetimes ---------------------------------------------------
     # Fifteen minutes is what makes a token that cannot be revoked acceptable

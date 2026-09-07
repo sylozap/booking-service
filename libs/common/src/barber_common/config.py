@@ -91,6 +91,28 @@ class BaseAppSettings(BaseSettings):
     otlp_enabled: bool = False
     otlp_endpoint: str | None = None
 
+    # --- verifying access tokens -------------------------------------------
+    # Every service checks the tokens it receives itself (ADR-0010), so every
+    # service needs these -- including ``auth``, which verifies with the key it
+    # already holds instead of fetching it from itself.
+    #
+    # The expected ``iss``. A setting rather than a constant so that a token
+    # minted by the auth of the dev cluster is not accepted in prod.
+    jwt_issuer: str = "https://barber.local/auth"
+    # Base URL of ``auth``, where /.well-known/jwks.json is served. Optional
+    # only because ``auth`` does not use it; any other service that installs
+    # the JWKS-backed verifier fails at startup without it.
+    jwks_url: str | None = None
+    # How long keys are kept before a refresh, and the floor on how often an
+    # unknown kid may force one. The second is what keeps a burst of forged
+    # headers from turning into a burst of requests to ``auth``.
+    jwks_cache_ttl_seconds: float = 300.0
+    jwks_refresh_min_interval_seconds: float = 10.0
+    # For clock skew between pods, and for nothing else. Not a grace period:
+    # an access token that cannot be revoked is only acceptable because it
+    # expires when it says it does.
+    jwt_leeway_seconds: float = 5.0
+
     health_check_timeout_seconds: float = 2.0
 
     @classmethod
