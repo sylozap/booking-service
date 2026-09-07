@@ -13,6 +13,10 @@ dependencies = [
     # What pydantic's EmailStr delegates to. Without it the annotation raises at
     # import time instead of validating anything.
     "email-validator==2.3.0",
+    # RS256 access tokens: signing here, verification in every service from
+    # T1.11. The crypto extra pulls in cryptography, which is also what reads
+    # the private key PEM and computes the RFC 7638 thumbprint used as the kid.
+    "pyjwt[crypto]==2.13.0",
 ]
 
 [tool.uv.sources]

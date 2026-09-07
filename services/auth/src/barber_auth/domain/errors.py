@@ -18,9 +18,12 @@ from barber_common.errors import DomainError
 __all__ = [
     "ConfirmationTokenInvalid",
     "EmailAlreadyRegistered",
+    "EmailNotConfirmed",
+    "InvalidCredentials",
     "InvalidEmailAddress",
     "InvalidPhoneNumber",
     "PhoneAlreadyRegistered",
+    "RefreshTokenInvalid",
     "WeakPassword",
 ]
 
@@ -84,3 +87,49 @@ class ConfirmationTokenInvalid(DomainError):
     code = "confirmation_token_invalid"
     http_status = 422
     title = "Confirmation token is not valid"
+
+
+class InvalidCredentials(DomainError):
+    """The login attempt failed, and the answer does not say why.
+
+    One error for "no such user", "wrong password" and "the account is
+    deactivated". Three different answers would turn the login endpoint into a
+    way to find out which addresses are registered, and the timing is equalised
+    for the same reason -- see
+    :meth:`~barber_auth.domain.passwords.PasswordHasher.verify_dummy`.
+
+    Deliberately not ``403``: the caller may retry with other credentials, and
+    ``401`` is what says so.
+    """
+
+    code = "unauthorized"
+    http_status = 401
+    title = "Authentication required"
+
+
+class EmailNotConfirmed(DomainError):
+    """The password was right, but the address behind the account is unproven.
+
+    This one does name its reason, and it is the exception to the rule above on
+    purpose: the caller has already proven they know the password, so nothing
+    is being revealed to a stranger, and a user who cannot be told to go and
+    click the link has no way out of the state they are in.
+    """
+
+    code = "email_not_confirmed"
+    http_status = 403
+    title = "Email address is not confirmed"
+
+
+class RefreshTokenInvalid(DomainError):
+    """The refresh token is unknown, expired, or already spent.
+
+    One code for all three, and the reuse of an already spent token is not
+    distinguished either -- it answers exactly like an expired one, while
+    revoking the whole family behind the caller's back. Naming it would tell
+    whoever stole the token that the theft was noticed.
+    """
+
+    code = "unauthorized"
+    http_status = 401
+    title = "Authentication required"

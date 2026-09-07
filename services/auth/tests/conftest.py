@@ -12,18 +12,28 @@ tests writing to ``users`` never see each other.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from datetime import UTC, datetime
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from barber_auth.adapters.argon2_hasher import Argon2Hasher
 from barber_auth.adapters.dev_mailer import DevMailer
+from barber_auth.adapters.rsa_signer import RsaTokenSigner
+from barber_auth.domain.identifiers import SalonId, UserId
+from barber_auth.domain.roles import Role
 from barber_auth.main import create_application
+from barber_auth.models.user import User
+from barber_auth.repositories.users import UserRepository
+from barber_auth.services.keys import RegisterSigningKey
 from barber_auth.settings import ALEMBIC_INI, AuthSettings
 from barber_common.config import Environment
 from barber_common.db import create_engine, get_session
+from barber_common.db.session import create_session_factory, transaction
 from barber_common.testing.fixtures import (
     apply_migrations,
     create_database,
@@ -37,12 +47,34 @@ DATABASE_NAME = "auth_test"
 PLACEHOLDER_DSN = "postgresql+asyncpg://auth:secret@localhost:5432/auth"
 
 
+# 2048 bits and not the 4096 of scripts/gen_keys.py: this is the smallest size
+# the signer accepts, generating it is roughly ten times faster, and no test
+# asserts anything about the key size. Generated per session, never stored --
+# a PEM committed to the repository would be a signing key in git history and
+# would trip scripts/check-secrets.sh, which is exactly the point of that check.
+TEST_KEY_SIZE_BITS = 2048
+
+
+def generate_private_key_pem(key_size: int = TEST_KEY_SIZE_BITS) -> str:
+    """A throwaway RSA private key in PEM, for the tests that need to sign."""
+    key = rsa.generate_private_key(public_exponent=65537, key_size=key_size)
+    return key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode("ascii")
+
+
 def build_settings(**overrides: object) -> AuthSettings:
     """Settings of the service under test, with no environment behind them.
 
     argon2 is deliberately cheap here. The production parameters spend 64 MiB
     and tens of milliseconds per hash, and a suite that registers users would
     pay that on every test for a property none of them assert.
+
+    A signing key is generated unless the caller passes one. It is the one
+    field with no usable default in production, so every test that builds
+    settings would otherwise have to know about it.
     """
     fields: dict[str, object] = {
         "environment": Environment.TEST,
@@ -53,6 +85,8 @@ def build_settings(**overrides: object) -> AuthSettings:
         "password_argon2_memory_kib": 8,
         "password_argon2_parallelism": 1,
     }
+    if "jwt_private_key" not in overrides and "jwt_private_key_path" not in overrides:
+        fields["jwt_private_key"] = generate_private_key_pem()
     fields.update(overrides)
     return AuthSettings(**fields)  # type: ignore[arg-type]  # settings fields are typed per key
 
@@ -95,6 +129,69 @@ async def session(
         yield session
 
 
+@pytest.fixture(scope="session")
+def make_settings() -> Callable[..., AuthSettings]:
+    """The settings factory itself, for tests about configuration.
+
+    Handed over as a fixture rather than imported: pytest runs this suite in
+    importlib mode, so ``tests.conftest`` is not an importable module, and a
+    second copy of the factory in a test file would drift from this one.
+    """
+    return build_settings
+
+
+@pytest.fixture(scope="session")
+def make_private_key_pem() -> Callable[[], str]:
+    """The key generator, for tests that need more than one key."""
+    return generate_private_key_pem
+
+
+@pytest.fixture(scope="session")
+def private_key_pem(settings: AuthSettings) -> str:
+    """The key the application under test signs with, as a PEM."""
+    return settings.signing_key_pem()
+
+
+@pytest.fixture(scope="session")
+def other_private_key_pem() -> str:
+    """A second key, for the tests about telling two keys apart."""
+    return generate_private_key_pem()
+
+
+@pytest.fixture(scope="session")
+def signer(settings: AuthSettings) -> RsaTokenSigner:
+    """The signing key of the application under test.
+
+    Session scoped, like the settings it is built from: generating an RSA key
+    costs a noticeable fraction of a second and nothing in the suite benefits
+    from a different key per test.
+    """
+    return RsaTokenSigner(settings.signing_key_pem())
+
+
+@pytest.fixture
+async def concurrent_session_factory(
+    auth_dsn: str,
+) -> AsyncIterator[async_sessionmaker[AsyncSession]]:
+    """Sessions on genuinely separate connections, committing for real.
+
+    The ordinary ``session_factory`` puts every session on one connection
+    inside one transaction and rolls it back at the end. That is the right
+    trade for almost everything and useless for the one thing it cannot show:
+    two requests contending for the same row. ``SELECT ... FOR UPDATE`` on a
+    single connection blocks against itself or sees its own uncommitted work,
+    so the rotation race (T1.7) needs real connections and real commits.
+
+    The price is that a test using this fixture cleans up after itself -- see
+    the users it creates being deleted in ``tests/integration/test_refresh_race.py``.
+    """
+    engine = create_engine(auth_dsn, pool_size=5, max_overflow=5)
+    try:
+        yield create_session_factory(engine)
+    finally:
+        await engine.dispose()
+
+
 @pytest.fixture
 def hasher(settings: AuthSettings) -> Argon2Hasher:
     return Argon2Hasher(settings)
@@ -131,3 +228,60 @@ def app(
     yield application
 
     application.dependency_overrides.clear()
+
+
+@pytest.fixture
+async def registered_signing_key(
+    session: AsyncSession,
+    signer: RsaTokenSigner,
+) -> str:
+    """Publish the key of the application under test, as the lifespan would.
+
+    The ``app`` fixture does not run the lifespan -- there is no broker and no
+    schema check in a test -- so the registration that normally happens at
+    startup is done here, through the same scenario. A test that reads JWKS or
+    verifies a token asks for this fixture; one that does not is unaffected.
+    """
+    return await RegisterSigningKey(session=session, signer=signer).execute()
+
+
+# What a test gets to build a user with: it names the fields its assertion is
+# about and the factory fills in the rest.
+UserFactory = Callable[..., Awaitable[User]]
+
+
+@pytest.fixture
+async def make_user(session: AsyncSession, hasher: Argon2Hasher) -> UserFactory:
+    """Create an account directly, without going through registration.
+
+    Registration is a scenario with its own tests. A login test that had to
+    drive it would fail when registration changes, for reasons that have
+    nothing to do with logging in -- and it could not build the accounts that
+    matter most here, the unconfirmed and the deactivated ones.
+    """
+
+    async def factory(
+        *,
+        email: str = "ivan@example.com",
+        phone: str = "+79991234567",
+        password: str = "correct-horse-9",
+        confirmed: bool = True,
+        is_active: bool = True,
+        roles: tuple[tuple[Role, SalonId | None], ...] = ((Role.CLIENT, None),),
+    ) -> User:
+        users = UserRepository(session)
+        async with transaction(session):
+            user = await users.add(
+                User(
+                    email=email,
+                    phone=phone,
+                    password_hash=hasher.hash(password),
+                    email_confirmed_at=datetime.now(UTC) if confirmed else None,
+                    is_active=is_active,
+                )
+            )
+            for role, salon_id in roles:
+                await users.grant_role(user_id=UserId(user.id), role=role, salon_id=salon_id)
+        return user
+
+    return factory
