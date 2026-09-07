@@ -8,10 +8,9 @@ from uuid import uuid4
 import pytest
 
 from barber_auth.domain.identifiers import SalonId, UserId
-from barber_auth.domain.roles import Role
+from barber_auth.domain.roles import Role, RoleGrant
 from barber_auth.domain.tokens import (
     ACCESS_TOKEN_TTL_MINUTES,
-    RoleGrant,
     build_access_claims,
     hash_refresh_token,
     is_refresh_token_reused,

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from datetime import UTC, datetime
+from uuid import uuid4
 
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -22,6 +23,7 @@ from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from barber_auth.adapters.argon2_hasher import Argon2Hasher
+from barber_auth.adapters.database_keys import DatabaseKeys
 from barber_auth.adapters.dev_mailer import DevMailer
 from barber_auth.adapters.rsa_signer import RsaTokenSigner
 from barber_auth.domain.identifiers import SalonId, UserId
@@ -30,7 +32,9 @@ from barber_auth.main import create_application
 from barber_auth.models.user import User
 from barber_auth.repositories.users import UserRepository
 from barber_auth.services.keys import RegisterSigningKey
+from barber_auth.services.tokens import IssueTokenPair
 from barber_auth.settings import ALEMBIC_INI, AuthSettings
+from barber_common.auth import TokenVerifier, use_authentication
 from barber_common.config import Environment
 from barber_common.db import create_engine, get_session
 from barber_common.db.session import create_session_factory, transaction
@@ -285,3 +289,82 @@ async def make_user(session: AsyncSession, hasher: Argon2Hasher) -> UserFactory:
         return user
 
     return factory
+
+
+@pytest.fixture
+def app_with_verifier(
+    app: FastAPI,
+    session_factory: async_sessionmaker[AsyncSession],
+    settings: AuthSettings,
+) -> Iterator[FastAPI]:
+    """The application with token verification wired to the test database.
+
+    ``create_application`` installs the verifier in the lifespan, which does
+    not run here, so the same wiring is done against the rolled-back session
+    factory. Everything else is production code: the tokens are real, signed by
+    the real key and checked by the real verifier, so a test cannot accidentally
+    grant itself a role by handing the endpoint a dictionary.
+    """
+    use_authentication(
+        app,
+        TokenVerifier(
+            keys=DatabaseKeys(session_factory),
+            issuer=settings.jwt_issuer,
+            leeway_seconds=settings.jwt_leeway_seconds,
+        ),
+    )
+
+    yield app
+
+    app.state.token_verifier = None
+
+
+# Signs a user in and returns the Authorization header of their session.
+AuthorizationFactory = Callable[..., Awaitable[dict[str, str]]]
+
+
+@pytest.fixture
+async def authorize(
+    session: AsyncSession,
+    make_user: UserFactory,
+    signer: RsaTokenSigner,
+    settings: AuthSettings,
+    registered_signing_key: str,
+) -> AuthorizationFactory:
+    """Build a caller with the roles a test needs, and their bearer header.
+
+    Goes through the real login scenario rather than minting a token by hand:
+    a test that forges its own tokens stops testing whether the endpoint checks
+    them.
+    """
+
+    async def factory(
+        *,
+        roles: tuple[tuple[Role, SalonId | None], ...] = ((Role.CLIENT, None),),
+        email: str | None = None,
+        phone: str | None = None,
+    ) -> dict[str, str]:
+        address = email or f"caller-{uuid4().hex[:12]}@example.com"
+        password = "correct-horse-9"
+        await make_user(
+            email=address,
+            phone=phone or f"+7999{uuid4().int % 10**7:07d}",
+            password=password,
+            roles=roles,
+        )
+        pair = await IssueTokenPair(
+            session=session,
+            hasher=hasher_of(settings),
+            signer=signer,
+            issuer=settings.jwt_issuer,
+            access_ttl_minutes=settings.access_token_ttl_minutes,
+            refresh_ttl_days=settings.refresh_token_ttl_days,
+        ).execute(email=address, password=password)
+        return {"Authorization": f"Bearer {pair.access_token}"}
+
+    return factory
+
+
+def hasher_of(settings: AuthSettings) -> Argon2Hasher:
+    """One hasher per settings object, built where a fixture cannot reach."""
+    return Argon2Hasher(settings)

@@ -24,6 +24,9 @@ __all__ = [
     "InvalidPhoneNumber",
     "PhoneAlreadyRegistered",
     "RefreshTokenInvalid",
+    "RoleNotGrantable",
+    "RoleNotHeld",
+    "UserNotFound",
     "WeakPassword",
 ]
 
@@ -133,3 +136,42 @@ class RefreshTokenInvalid(DomainError):
     code = "unauthorized"
     http_status = 401
     title = "Authentication required"
+
+
+class UserNotFound(DomainError):
+    """No account with this identifier.
+
+    Only raised for callers who are already entitled to manage roles, so it
+    reveals nothing: an administrator who mistypes an id deserves to be told
+    that rather than to watch a grant silently do nothing.
+    """
+
+    code = "not_found"
+    http_status = 404
+    title = "User not found"
+
+
+class RoleNotGrantable(DomainError):
+    """The role cannot be handed out this way.
+
+    Either it is not grantable at all -- ``client`` arrives with registration
+    and has no second source -- or it was named without the salon it only makes
+    sense inside.
+    """
+
+    code = "validation_error"
+    http_status = 422
+    title = "Role cannot be granted"
+
+
+class RoleNotHeld(DomainError):
+    """The user does not hold the grant being revoked.
+
+    Named separately from a missing user because the caller is already allowed
+    to see this account, so saying so costs nothing and saves them wondering
+    why nothing changed.
+    """
+
+    code = "not_found"
+    http_status = 404
+    title = "User does not hold this role"

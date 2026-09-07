@@ -20,6 +20,7 @@ from barber_auth.domain.signing import TokenSigner
 from barber_auth.services.email_confirmation import ConfirmEmail
 from barber_auth.services.keys import PublishedKeys
 from barber_auth.services.registration import RegisterUser
+from barber_auth.services.roles import GrantRole, RevokeRole
 from barber_auth.services.tokens import (
     IssueTokenPair,
     RefreshTokenPair,
@@ -31,10 +32,12 @@ from barber_common.db.session import get_session
 
 __all__ = [
     "ConfirmEmailScenario",
+    "GrantRoleScenario",
     "IssueTokenPairScenario",
     "PublishedKeysScenario",
     "RefreshTokenPairScenario",
     "RegisterUserScenario",
+    "RevokeRoleScenario",
     "RevokeSessionsScenario",
     "get_mailer",
     "get_password_hasher",
@@ -162,10 +165,22 @@ def build_published_keys(session: SessionDependency) -> PublishedKeys:
     return PublishedKeys(session)
 
 
+def build_grant_role(session: SessionDependency) -> GrantRole:
+    """The role granting scenario for this request."""
+    return GrantRole(session)
+
+
+def build_revoke_role(session: SessionDependency) -> RevokeRole:
+    """The role revoking scenario for this request."""
+    return RevokeRole(session)
+
+
 RegisterUserScenario = Annotated[RegisterUser, Depends(build_register_user)]
 ConfirmEmailScenario = Annotated[ConfirmEmail, Depends(build_confirm_email)]
 IssueTokenPairScenario = Annotated[IssueTokenPair, Depends(build_issue_token_pair)]
 RefreshTokenPairScenario = Annotated[RefreshTokenPair, Depends(build_refresh_token_pair)]
 RevokeSessionsScenario = Annotated[RevokeSessions, Depends(build_revoke_sessions)]
 PublishedKeysScenario = Annotated[PublishedKeys, Depends(build_published_keys)]
+GrantRoleScenario = Annotated[GrantRole, Depends(build_grant_role)]
+RevokeRoleScenario = Annotated[RevokeRole, Depends(build_revoke_role)]
 RequestSessionContext = Annotated[SessionContext, Depends(get_session_context)]

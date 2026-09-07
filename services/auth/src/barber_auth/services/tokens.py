@@ -40,11 +40,10 @@ from barber_auth.domain.errors import (
 )
 from barber_auth.domain.identifiers import SalonId, UserId
 from barber_auth.domain.passwords import PasswordHasher
-from barber_auth.domain.roles import Role
+from barber_auth.domain.roles import Role, RoleGrant
 from barber_auth.domain.signing import TokenSigner
 from barber_auth.domain.tokens import (
     REFRESH_TOKEN_BYTES,
-    RoleGrant,
     build_access_claims,
     hash_refresh_token,
     is_refresh_token_reused,

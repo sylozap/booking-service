@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from datetime import datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import CursorResult, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from barber_auth.domain.identifiers import SalonId, UserId
@@ -45,6 +45,33 @@ class UserRepository:
         self._session.add(grant)
         await self._session.flush()
         return grant
+
+    async def revoke_role(
+        self,
+        *,
+        user_id: UserId,
+        role: Role,
+        salon_id: SalonId | None = None,
+    ) -> bool:
+        """Remove one grant, reporting whether there was one.
+
+        ``salon_id IS NULL`` rather than ``= NULL``: a global grant and a
+        grant scoped to a salon are different rows, and comparing a column to
+        NULL with ``=`` matches nothing, so the global grant would never be
+        found and revoking it would silently do nothing.
+        """
+        condition = (
+            UserRole.salon_id.is_(None) if salon_id is None else UserRole.salon_id == salon_id
+        )
+        statement = delete(UserRole).where(
+            UserRole.user_id == user_id,
+            UserRole.role == role.value,
+            condition,
+        )
+        result = await self._session.execute(statement)
+        if not isinstance(result, CursorResult):  # pragma: no cover - DELETE always is one
+            raise TypeError("expected a cursor result from a DELETE statement")
+        return result.rowcount > 0
 
     async def get_by_id(self, user_id: UserId) -> User | None:
         """One user by identifier."""

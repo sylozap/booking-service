@@ -22,19 +22,17 @@ is not a set of live sessions, and every use rotates it.
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
 from datetime import datetime, timedelta
 from uuid import UUID
 
-from barber_auth.domain.identifiers import SalonId, UserId
-from barber_auth.domain.roles import Role
+from barber_auth.domain.identifiers import UserId
+from barber_auth.domain.roles import RoleGrant
 
 __all__ = [
     "ACCESS_TOKEN_TTL_MINUTES",
     "ACCESS_TOKEN_TYPE",
     "REFRESH_TOKEN_BYTES",
     "REFRESH_TOKEN_TTL_DAYS",
-    "RoleGrant",
     "build_access_claims",
     "hash_refresh_token",
     "is_refresh_token_reused",
@@ -55,27 +53,6 @@ REFRESH_TOKEN_BYTES = 32
 # service tokens (T1.10), and an endpoint under /internal must be able to tell
 # them apart by looking at the token rather than at the shape of ``sub``.
 ACCESS_TOKEN_TYPE = "access"  # noqa: S105 - the name of a token kind, not a credential
-
-
-@dataclass(frozen=True, slots=True)
-class RoleGrant:
-    """One role a user holds, and the salon it is limited to, if any.
-
-    ``salon_id`` is ``None`` for the global roles. This is the shape that ends
-    up inside the ``roles`` claim, so a service reading the token learns not
-    just that someone is a ``salon_admin`` but of which salon
-    (docs/04-api-contracts.md).
-    """
-
-    role: Role
-    salon_id: SalonId | None = None
-
-    def as_claim(self) -> dict[str, str | None]:
-        """The member of the ``roles`` array that stands for this grant."""
-        return {
-            "role": self.role.value,
-            "salon_id": str(self.salon_id) if self.salon_id is not None else None,
-        }
 
 
 def build_access_claims(
