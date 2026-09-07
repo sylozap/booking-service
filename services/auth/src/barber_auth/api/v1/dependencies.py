@@ -21,6 +21,7 @@ from barber_auth.services.email_confirmation import ConfirmEmail
 from barber_auth.services.keys import PublishedKeys
 from barber_auth.services.registration import RegisterUser
 from barber_auth.services.roles import GrantRole, RevokeRole
+from barber_auth.services.service_tokens import IssueServiceToken
 from barber_auth.services.tokens import (
     IssueTokenPair,
     RefreshTokenPair,
@@ -33,6 +34,7 @@ from barber_common.db.session import get_session
 __all__ = [
     "ConfirmEmailScenario",
     "GrantRoleScenario",
+    "IssueServiceTokenScenario",
     "IssueTokenPairScenario",
     "PublishedKeysScenario",
     "RefreshTokenPairScenario",
@@ -175,6 +177,22 @@ def build_revoke_role(session: SessionDependency) -> RevokeRole:
     return RevokeRole(session)
 
 
+def build_issue_service_token(
+    session: SessionDependency,
+    settings: Annotated[AuthSettings, Depends(get_settings)],
+    hasher: Annotated[PasswordHasher, Depends(get_password_hasher)],
+    signer: Annotated[TokenSigner, Depends(get_signer)],
+) -> IssueServiceToken:
+    """The machine-to-machine token scenario for this request."""
+    return IssueServiceToken(
+        session=session,
+        hasher=hasher,
+        signer=signer,
+        issuer=settings.jwt_issuer,
+        ttl_minutes=settings.service_token_ttl_minutes,
+    )
+
+
 RegisterUserScenario = Annotated[RegisterUser, Depends(build_register_user)]
 ConfirmEmailScenario = Annotated[ConfirmEmail, Depends(build_confirm_email)]
 IssueTokenPairScenario = Annotated[IssueTokenPair, Depends(build_issue_token_pair)]
@@ -182,5 +200,6 @@ RefreshTokenPairScenario = Annotated[RefreshTokenPair, Depends(build_refresh_tok
 RevokeSessionsScenario = Annotated[RevokeSessions, Depends(build_revoke_sessions)]
 PublishedKeysScenario = Annotated[PublishedKeys, Depends(build_published_keys)]
 GrantRoleScenario = Annotated[GrantRole, Depends(build_grant_role)]
+IssueServiceTokenScenario = Annotated[IssueServiceToken, Depends(build_issue_service_token)]
 RevokeRoleScenario = Annotated[RevokeRole, Depends(build_revoke_role)]
 RequestSessionContext = Annotated[SessionContext, Depends(get_session_context)]

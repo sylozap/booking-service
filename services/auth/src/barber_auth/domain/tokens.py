@@ -33,7 +33,10 @@ __all__ = [
     "ACCESS_TOKEN_TYPE",
     "REFRESH_TOKEN_BYTES",
     "REFRESH_TOKEN_TTL_DAYS",
+    "SERVICE_TOKEN_TTL_MINUTES",
+    "SERVICE_TOKEN_TYPE",
     "build_access_claims",
+    "build_service_claims",
     "hash_refresh_token",
     "is_refresh_token_reused",
     "is_refresh_token_usable",
@@ -53,6 +56,15 @@ REFRESH_TOKEN_BYTES = 32
 # service tokens (T1.10), and an endpoint under /internal must be able to tell
 # them apart by looking at the token rather than at the shape of ``sub``.
 ACCESS_TOKEN_TYPE = "access"  # noqa: S105 - the name of a token kind, not a credential
+# What a service presents when it calls another service. Same signature, same
+# issuer, different ``typ`` -- which is the whole of what stops a customer's
+# token from opening an endpoint under /internal (T1.10).
+SERVICE_TOKEN_TYPE = "service"  # noqa: S105 - likewise a kind, not a credential
+
+# Shorter than a user token on purpose. A service asks for one per burst of
+# calls rather than per session, so a short life costs little and bounds the
+# window a leaked one is useful for.
+SERVICE_TOKEN_TTL_MINUTES = 5
 
 
 def build_access_claims(
@@ -84,6 +96,38 @@ def build_access_claims(
         # identical tokens distinguishable in a log or an incident.
         "jti": str(token_id),
         "typ": ACCESS_TOKEN_TYPE,
+        "iat": int(issued_at.timestamp()),
+        "exp": int(expires_at.timestamp()),
+    }
+
+
+def build_service_claims(
+    *,
+    client_id: str,
+    scopes: tuple[str, ...],
+    issuer: str,
+    token_id: UUID,
+    issued_at: datetime,
+    ttl_minutes: int = SERVICE_TOKEN_TTL_MINUTES,
+) -> dict[str, object]:
+    """Assemble the payload of a machine-to-machine token.
+
+    The same shape as a user token with two differences that matter. ``sub`` is
+    a client id rather than a user id, and ``typ`` says ``service`` -- so an
+    endpoint under ``/internal`` refuses a customer's token by reading one
+    claim rather than by guessing from the shape of the subject.
+
+    There is no ``roles`` claim, and its absence is deliberate: a service is
+    not a person and has no role in a salon. What it may do is ``scopes``, and
+    the two are never mixed.
+    """
+    expires_at = issued_at + timedelta(minutes=ttl_minutes)
+    return {
+        "sub": client_id,
+        "scopes": list(scopes),
+        "iss": issuer,
+        "jti": str(token_id),
+        "typ": SERVICE_TOKEN_TYPE,
         "iat": int(issued_at.timestamp()),
         "exp": int(expires_at.timestamp()),
     }

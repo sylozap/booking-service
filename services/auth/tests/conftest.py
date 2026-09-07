@@ -32,6 +32,7 @@ from barber_auth.main import create_application
 from barber_auth.models.user import User
 from barber_auth.repositories.users import UserRepository
 from barber_auth.services.keys import RegisterSigningKey
+from barber_auth.services.service_tokens import RegisterServiceClients
 from barber_auth.services.tokens import IssueTokenPair
 from barber_auth.settings import ALEMBIC_INI, AuthSettings
 from barber_common.auth import TokenVerifier, use_authentication
@@ -60,13 +61,34 @@ TEST_KEY_SIZE_BITS = 2048
 
 
 def generate_private_key_pem(key_size: int = TEST_KEY_SIZE_BITS) -> str:
-    """A throwaway RSA private key in PEM, for the tests that need to sign."""
+    """A fresh throwaway RSA private key in PEM. Each call is a different key."""
     key = rsa.generate_private_key(public_exponent=65537, key_size=key_size)
     return key.private_bytes(
         encoding=serialization.Encoding.PEM,
         format=serialization.PrivateFormat.PKCS8,
         encryption_algorithm=serialization.NoEncryption(),
     ).decode("ascii")
+
+
+_DEFAULT_PRIVATE_KEY: str | None = None
+
+
+def default_private_key_pem() -> str:
+    """The one key every settings object of this run shares.
+
+    A module that overrides ``settings`` -- the service-client tests do -- gets
+    a second settings object, and if each one generated its own key it would
+    sign with a key the session-scoped ``signer`` cannot verify. That failure
+    only appears when the whole suite runs, which is the worst kind. One key
+    per run also spares the suite a dozen RSA generations.
+
+    A test that needs a *different* key asks for one with
+    :func:`generate_private_key_pem`.
+    """
+    global _DEFAULT_PRIVATE_KEY
+    if _DEFAULT_PRIVATE_KEY is None:
+        _DEFAULT_PRIVATE_KEY = generate_private_key_pem()
+    return _DEFAULT_PRIVATE_KEY
 
 
 def build_settings(**overrides: object) -> AuthSettings:
@@ -90,7 +112,7 @@ def build_settings(**overrides: object) -> AuthSettings:
         "password_argon2_parallelism": 1,
     }
     if "jwt_private_key" not in overrides and "jwt_private_key_path" not in overrides:
-        fields["jwt_private_key"] = generate_private_key_pem()
+        fields["jwt_private_key"] = default_private_key_pem()
     fields.update(overrides)
     return AuthSettings(**fields)  # type: ignore[arg-type]  # settings fields are typed per key
 
@@ -232,6 +254,18 @@ def app(
     yield application
 
     application.dependency_overrides.clear()
+
+
+@pytest.fixture
+async def registered_service_clients(
+    session: AsyncSession,
+    settings: AuthSettings,
+    hasher: Argon2Hasher,
+) -> int:
+    """Register the configured internal callers, as the lifespan would."""
+    return await RegisterServiceClients(
+        session=session, hasher=hasher, clients=settings.service_clients
+    ).execute()
 
 
 @pytest.fixture

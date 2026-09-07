@@ -14,9 +14,10 @@ from barber_auth.adapters.argon2_hasher import Argon2Hasher
 from barber_auth.adapters.database_keys import DatabaseKeys
 from barber_auth.adapters.dev_mailer import DevMailer
 from barber_auth.adapters.rsa_signer import RsaTokenSigner
-from barber_auth.api.v1 import jwks
+from barber_auth.api.v1 import jwks, service_tokens
 from barber_auth.api.v1.router import router
 from barber_auth.services.keys import RegisterSigningKey
+from barber_auth.services.service_tokens import RegisterServiceClients
 from barber_auth.settings import ALEMBIC_INI, AuthSettings
 from barber_common.app import create_app, use_database
 from barber_common.auth import TokenVerifier, use_authentication
@@ -50,6 +51,16 @@ def create_application(settings: AuthSettings | None = None) -> FastAPI:
         async with database.unit_of_work() as session:
             await RegisterSigningKey(session=session, signer=app.state.signer).execute()
 
+        # Internal callers come from configuration rather than from a
+        # migration: a client seeded by a migration carries its secret hash in
+        # git, and rotating it becomes a schema change.
+        async with database.unit_of_work() as session:
+            await RegisterServiceClients(
+                session=session,
+                hasher=app.state.password_hasher,
+                clients=resolved.service_clients,
+            ).execute()
+
         # auth verifies the tokens it issued itself, against signing_keys
         # rather than against its own JWKS endpoint: it holds the keys already,
         # and a service that calls itself over HTTP depends on its own
@@ -77,11 +88,12 @@ def create_application(settings: AuthSettings | None = None) -> FastAPI:
             await stack.enter_async_context(relay.run_in_background())
             yield
 
-    # The JWKS router is mounted at the root and not behind /api/v1: the path
-    # is reserved by RFC 8615 and named by the specification, not by us.
+    # Two routers outside the public prefix. /.well-known is reserved by
+    # RFC 8615 and named by the specification; /internal/v1 is not part of the
+    # public contract and is not published through the gateway.
     app = create_app(
         resolved,
-        routers=[router, jwks.router],
+        routers=[router, jwks.router, service_tokens.router],
         lifespan=lifespan,
         title="Barber Auth",
     )

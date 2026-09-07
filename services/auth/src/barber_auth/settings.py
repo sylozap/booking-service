@@ -5,17 +5,37 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Self
 
-from pydantic import SecretStr, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, SecretStr, field_validator, model_validator
 
-from barber_auth.domain.tokens import ACCESS_TOKEN_TTL_MINUTES, REFRESH_TOKEN_TTL_DAYS
+from barber_auth.domain.tokens import (
+    ACCESS_TOKEN_TTL_MINUTES,
+    REFRESH_TOKEN_TTL_DAYS,
+    SERVICE_TOKEN_TTL_MINUTES,
+)
 from barber_common.config import BaseAppSettings, ConfigurationError
 
-__all__ = ["ALEMBIC_INI", "AuthSettings"]
+__all__ = ["ALEMBIC_INI", "AuthSettings", "ServiceClientConfig"]
 
 # services/auth/alembic.ini, two directories above the package. The startup
 # check and the migration Job read the same file, so they cannot disagree about
 # which revision is the head.
 ALEMBIC_INI = Path(__file__).resolve().parents[2] / "alembic.ini"
+
+
+class ServiceClientConfig(BaseModel):
+    """One machine-to-machine client, as the environment describes it.
+
+    The secret lives in a Kubernetes Secret and reaches the database only as a
+    hash, exactly like a password. ``SecretStr`` is what keeps it out of a log
+    line that dumps the settings (docs/CODING_STANDARDS.md section 12).
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    secret: SecretStr
+    # What a token issued to this client is allowed to do. Deliberately not
+    # roles: a service is not a person and has no place in a salon.
+    scopes: tuple[str, ...] = ()
 
 
 class AuthSettings(BaseAppSettings):
@@ -60,6 +80,17 @@ class AuthSettings(BaseAppSettings):
     # (ADR-0010); thirty days is how long a session survives without a login.
     access_token_ttl_minutes: int = ACCESS_TOKEN_TTL_MINUTES
     refresh_token_ttl_days: int = REFRESH_TOKEN_TTL_DAYS
+    service_token_ttl_minutes: int = SERVICE_TOKEN_TTL_MINUTES
+
+    # --- machine to machine clients ----------------------------------------
+    # Registered at startup from here, the same way the signing key is loaded:
+    # a client seeded by a migration would put its secret hash in git and make
+    # rotating it a schema change. Given as JSON, for example
+    # {"booking": {"secret": "...", "scopes": ["catalog:read"]}}
+    #
+    # Empty by default. A deployment with no internal callers is a valid one,
+    # and the endpoint simply refuses everything.
+    service_clients: dict[str, ServiceClientConfig] = {}
 
     @field_validator("jwt_private_key_path", "jwt_private_key", mode="before")
     @classmethod
