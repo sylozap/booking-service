@@ -82,6 +82,16 @@ class AuthSettings(BaseAppSettings):
     refresh_token_ttl_days: int = REFRESH_TOKEN_TTL_DAYS
     service_token_ttl_minutes: int = SERVICE_TOKEN_TTL_MINUTES
 
+    # --- background cleanup ------------------------------------------------
+    # How long a row stays after it stopped meaning anything. Not zero, so that
+    # an incident a few days old can still be read; the window is what the
+    # cleanup adds on top of the expiry, never a substitute for it.
+    cleanup_interval_seconds: float = 3600.0
+    cleanup_batch_size: int = 1000
+    cleanup_token_retention_days: int = 7
+    cleanup_confirmation_retention_days: int = 7
+    cleanup_processed_event_retention_days: int = 7
+
     # --- machine to machine clients ----------------------------------------
     # Registered at startup from here, the same way the signing key is loaded:
     # a client seeded by a migration would put its secret hash in git and make

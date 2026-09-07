@@ -19,6 +19,7 @@ from barber_auth.api.v1.router import router
 from barber_auth.services.keys import RegisterSigningKey
 from barber_auth.services.service_tokens import RegisterServiceClients
 from barber_auth.settings import ALEMBIC_INI, AuthSettings
+from barber_auth.workers.cleanup import CleanupWorker
 from barber_common.app import create_app, use_database
 from barber_common.auth import TokenVerifier, use_authentication
 from barber_common.db import Database, check_schema_is_current, load_config
@@ -79,6 +80,14 @@ def create_application(settings: AuthSettings | None = None) -> FastAPI:
             service_name=resolved.service_name,
         )
         relay = OutboxRelay(session_factory=database.session_factory, producer=producer)
+        cleanup = CleanupWorker(
+            session_factory=database.session_factory,
+            token_retention_days=resolved.cleanup_token_retention_days,
+            confirmation_retention_days=resolved.cleanup_confirmation_retention_days,
+            processed_event_retention_days=resolved.cleanup_processed_event_retention_days,
+            batch_size=resolved.cleanup_batch_size,
+            interval_seconds=resolved.cleanup_interval_seconds,
+        )
 
         async with AsyncExitStack() as stack:
             # The producer is deliberately not started here. The relay connects
@@ -86,6 +95,7 @@ def create_application(settings: AuthSettings | None = None) -> FastAPI:
             # instead of stopping the service (docs/08-consistency.md).
             stack.push_async_callback(producer.stop)
             await stack.enter_async_context(relay.run_in_background())
+            await stack.enter_async_context(cleanup.run_in_background())
             yield
 
     # Two routers outside the public prefix. /.well-known is reserved by
