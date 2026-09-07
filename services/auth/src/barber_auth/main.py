@@ -10,6 +10,8 @@ from contextlib import AsyncExitStack, asynccontextmanager
 
 from fastapi import FastAPI
 
+from barber_auth.adapters.argon2_hasher import Argon2Hasher
+from barber_auth.adapters.dev_mailer import DevMailer
 from barber_auth.api.v1.router import router
 from barber_auth.settings import ALEMBIC_INI, AuthSettings
 from barber_common.app import create_app, use_database
@@ -51,4 +53,22 @@ def create_application(settings: AuthSettings | None = None) -> FastAPI:
             await stack.enter_async_context(relay.run_in_background())
             yield
 
-    return create_app(resolved, routers=[router], lifespan=lifespan, title="Barber Auth")
+    app = create_app(resolved, routers=[router], lifespan=lifespan, title="Barber Auth")
+    install_dependencies(app, resolved)
+    return app
+
+
+def install_dependencies(app: FastAPI, settings: AuthSettings) -> None:
+    """Put the singletons of the service where the routers look for them.
+
+    Built here rather than in the lifespan: neither needs a connection, and a
+    test that assembles the application without starting it still gets a
+    working registration. The argon2 hasher is expensive to construct -- it
+    builds the hash it verifies against when there is no user -- and there is
+    one of it per process for that reason.
+    """
+    app.state.password_hasher = Argon2Hasher(settings)
+    app.state.mailer = DevMailer(
+        environment=settings.environment,
+        confirmation_url=settings.email_confirmation_url,
+    )

@@ -11,5 +11,28 @@ from barber_common.events.envelope import (
     JsonEnvelope,
     build_envelope,
 )
+from barber_common.events.users import (
+    AUTH_USERS_TOPIC,
+    USER_AGGREGATE_TYPE,
+    UserContactsUpdated,
+    UserDeactivated,
+    UserEmailConfirmationRequested,
+    UserEmailConfirmed,
+    UserEventType,
+    UserRegistered,
+)
 
-__all__ = ["ENVELOPE_VERSION", "EventEnvelope", "JsonEnvelope", "build_envelope"]
+__all__ = [
+    "AUTH_USERS_TOPIC",
+    "ENVELOPE_VERSION",
+    "USER_AGGREGATE_TYPE",
+    "EventEnvelope",
+    "JsonEnvelope",
+    "UserContactsUpdated",
+    "UserDeactivated",
+    "UserEmailConfirmationRequested",
+    "UserEmailConfirmed",
+    "UserEventType",
+    "UserRegistered",
+    "build_envelope",
+]

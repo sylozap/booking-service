@@ -6,6 +6,13 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
     "barber-common",
     "uvicorn[standard]==0.52.4",
+    # argon2id, the password hash of the platform. The reference implementation
+    # of the winner of the Password Hashing Competition; a hand written hash is
+    # one nobody can audit.
+    "argon2-cffi==25.1.0",
+    # What pydantic's EmailStr delegates to. Without it the annotation raises at
+    # import time instead of validating anything.
+    "email-validator==2.3.0",
 ]
 
 [tool.uv.sources]
