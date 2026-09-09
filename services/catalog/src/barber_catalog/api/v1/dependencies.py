@@ -13,6 +13,13 @@ from typing import Annotated
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from barber_catalog.services.catalog_services import (
+    ArchiveService,
+    CreateService,
+    ListSalonServices,
+    ReadService,
+    UpdateService,
+)
 from barber_catalog.services.masters import (
     CreateMaster,
     ListSalonMasters,
@@ -23,15 +30,20 @@ from barber_catalog.services.salons import CreateSalon, ListSalons, ReadSalon, U
 from barber_common.db.session import get_session
 
 __all__ = [
+    "ArchiveServiceScenario",
     "CreateMasterScenario",
     "CreateSalonScenario",
+    "CreateServiceScenario",
     "ListSalonMastersScenario",
+    "ListSalonServicesScenario",
     "ListSalonsScenario",
     "ReadMasterCardScenario",
     "ReadSalonScenario",
+    "ReadServiceScenario",
     "SessionDependency",
     "UpdateMasterScenario",
     "UpdateSalonScenario",
+    "UpdateServiceScenario",
 ]
 
 SessionDependency = Annotated[AsyncSession, Depends(get_session)]
@@ -87,3 +99,35 @@ CreateMasterScenario = Annotated[CreateMaster, Depends(build_create_master)]
 UpdateMasterScenario = Annotated[UpdateMaster, Depends(build_update_master)]
 ReadMasterCardScenario = Annotated[ReadMasterCard, Depends(build_read_master_card)]
 ListSalonMastersScenario = Annotated[ListSalonMasters, Depends(build_list_salon_masters)]
+
+
+def build_create_service(session: SessionDependency) -> CreateService:
+    """The service creation scenario for this request."""
+    return CreateService(session)
+
+
+def build_update_service(session: SessionDependency) -> UpdateService:
+    """The service update scenario for this request."""
+    return UpdateService(session)
+
+
+def build_archive_service(session: SessionDependency) -> ArchiveService:
+    """The service archiving scenario for this request."""
+    return ArchiveService(session)
+
+
+def build_read_service(session: SessionDependency) -> ReadService:
+    """The single service read scenario for this request."""
+    return ReadService(session)
+
+
+def build_list_salon_services(session: SessionDependency) -> ListSalonServices:
+    """The price list scenario for this request."""
+    return ListSalonServices(session)
+
+
+CreateServiceScenario = Annotated[CreateService, Depends(build_create_service)]
+UpdateServiceScenario = Annotated[UpdateService, Depends(build_update_service)]
+ArchiveServiceScenario = Annotated[ArchiveService, Depends(build_archive_service)]
+ReadServiceScenario = Annotated[ReadService, Depends(build_read_service)]
+ListSalonServicesScenario = Annotated[ListSalonServices, Depends(build_list_salon_services)]
