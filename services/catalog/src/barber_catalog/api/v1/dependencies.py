@@ -20,6 +20,7 @@ from barber_catalog.services.catalog_services import (
     ReadService,
     UpdateService,
 )
+from barber_catalog.services.master_service_details import ReadMasterServiceDetails
 from barber_catalog.services.master_services import (
     LinkMasterService,
     UnlinkMasterService,
@@ -43,6 +44,7 @@ __all__ = [
     "ListSalonServicesScenario",
     "ListSalonsScenario",
     "ReadMasterCardScenario",
+    "ReadMasterServiceDetailsScenario",
     "ReadSalonScenario",
     "ReadServiceScenario",
     "SessionDependency",
@@ -151,3 +153,13 @@ def build_unlink_master_service(session: SessionDependency) -> UnlinkMasterServi
 
 LinkMasterServiceScenario = Annotated[LinkMasterService, Depends(build_link_master_service)]
 UnlinkMasterServiceScenario = Annotated[UnlinkMasterService, Depends(build_unlink_master_service)]
+
+
+def build_read_master_service_details(session: SessionDependency) -> ReadMasterServiceDetails:
+    """The internal catalog read scenario for this request."""
+    return ReadMasterServiceDetails(session)
+
+
+ReadMasterServiceDetailsScenario = Annotated[
+    ReadMasterServiceDetails, Depends(build_read_master_service_details)
+]

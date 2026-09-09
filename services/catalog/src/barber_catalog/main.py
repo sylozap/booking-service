@@ -10,6 +10,7 @@ from contextlib import AsyncExitStack, asynccontextmanager
 
 from fastapi import FastAPI
 
+from barber_catalog.api.v1 import internal
 from barber_catalog.api.v1.router import router
 from barber_catalog.settings import ALEMBIC_INI, CatalogSettings
 from barber_common.app import create_app, use_database
@@ -62,4 +63,12 @@ def create_application(settings: CatalogSettings | None = None) -> FastAPI:
             use_authentication(app, verifier)
             yield
 
-    return create_app(resolved, routers=[router], lifespan=lifespan, title="Barber Catalog")
+    # Two routers. /internal/v1 is not part of the public contract, is not
+    # published through the gateway, and opens only to a service token, so it
+    # is mounted beside the public prefix rather than inside it.
+    return create_app(
+        resolved,
+        routers=[router, internal.router],
+        lifespan=lifespan,
+        title="Barber Catalog",
+    )
