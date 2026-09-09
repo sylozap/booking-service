@@ -39,9 +39,21 @@ class Base(DeclarativeBase):
     Relationships are declared with ``lazy="raise"`` at the point of definition:
     SQLAlchemy has no global default for it, and a lazy load that slips through
     turns into an N+1 that only shows up under load.
+
+    ``eager_defaults`` is the third, and it is not a performance setting. A
+    column filled by the database -- ``created_at``, ``updated_at`` and their
+    ``onupdate`` -- leaves the attribute expired after a flush, and the next
+    read of it is implicit IO. Under asyncio there is no such thing: SQLAlchemy
+    raises ``MissingGreenlet`` rather than blocking, so a scenario mapping a
+    just-updated row into a response fails at the moment it reads the
+    timestamp. With this on, the value comes back through ``RETURNING`` on the
+    statement that wrote it -- no expiry, no second round trip, and the same
+    behaviour for an ``INSERT`` and an ``UPDATE``.
     """
 
     metadata = metadata
+
+    __mapper_args__ = {"eager_defaults": True}
 
     type_annotation_map = {
         datetime.datetime: TIMESTAMP(timezone=True),

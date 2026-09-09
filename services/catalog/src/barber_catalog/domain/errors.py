@@ -30,7 +30,6 @@ __all__ = [
     "ServiceArchived",
     "ServiceFromAnotherSalon",
     "ServiceNotFound",
-    "UnknownTimezone",
 ]
 
 
@@ -97,16 +96,3 @@ class ServiceArchived(DomainError):
     code = "validation_error"
     http_status = 422
     title = "Service is archived"
-
-
-class UnknownTimezone(DomainError):
-    """The string is not an IANA time zone identifier.
-
-    A salon keeps a zone name and never an offset: an offset is right for half
-    the year, and a schedule stored against one breaks on the day the country
-    changes its clocks (docs/02-domain-rules.md).
-    """
-
-    code = "validation_error"
-    http_status = 422
-    title = "Time zone is not a known IANA identifier"

@@ -20,7 +20,7 @@ from barber_common.auth.dependencies import (
     require_service_token,
     use_authentication,
 )
-from barber_common.auth.jwks import JwksClient, refreshing
+from barber_common.auth.jwks import JwksClient, jwks_verifier, refreshing
 from barber_common.auth.keys import StaticKeys, UnknownSigningKey, VerificationKeys
 from barber_common.auth.verifier import InvalidToken, TokenVerifier
 
@@ -37,6 +37,7 @@ __all__ = [
     "VerificationKeys",
     "current_principal",
     "current_user",
+    "jwks_verifier",
     "principal_from_claims",
     "refreshing",
     "require_roles",
