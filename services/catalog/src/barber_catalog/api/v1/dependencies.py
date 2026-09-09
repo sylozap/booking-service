@@ -20,6 +20,10 @@ from barber_catalog.services.catalog_services import (
     ReadService,
     UpdateService,
 )
+from barber_catalog.services.master_services import (
+    LinkMasterService,
+    UnlinkMasterService,
+)
 from barber_catalog.services.masters import (
     CreateMaster,
     ListSalonMasters,
@@ -34,6 +38,7 @@ __all__ = [
     "CreateMasterScenario",
     "CreateSalonScenario",
     "CreateServiceScenario",
+    "LinkMasterServiceScenario",
     "ListSalonMastersScenario",
     "ListSalonServicesScenario",
     "ListSalonsScenario",
@@ -41,6 +46,7 @@ __all__ = [
     "ReadSalonScenario",
     "ReadServiceScenario",
     "SessionDependency",
+    "UnlinkMasterServiceScenario",
     "UpdateMasterScenario",
     "UpdateSalonScenario",
     "UpdateServiceScenario",
@@ -131,3 +137,17 @@ UpdateServiceScenario = Annotated[UpdateService, Depends(build_update_service)]
 ArchiveServiceScenario = Annotated[ArchiveService, Depends(build_archive_service)]
 ReadServiceScenario = Annotated[ReadService, Depends(build_read_service)]
 ListSalonServicesScenario = Annotated[ListSalonServices, Depends(build_list_salon_services)]
+
+
+def build_link_master_service(session: SessionDependency) -> LinkMasterService:
+    """The offering scenario for this request."""
+    return LinkMasterService(session)
+
+
+def build_unlink_master_service(session: SessionDependency) -> UnlinkMasterService:
+    """The withdrawal scenario for this request."""
+    return UnlinkMasterService(session)
+
+
+LinkMasterServiceScenario = Annotated[LinkMasterService, Depends(build_link_master_service)]
+UnlinkMasterServiceScenario = Annotated[UnlinkMasterService, Depends(build_unlink_master_service)]
