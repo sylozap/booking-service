@@ -42,6 +42,7 @@ from barber_catalog.schemas.masters import (
     OfferedServiceResponse,
 )
 from barber_catalog.services.authorization import require_salon_scope
+from barber_catalog.services.cache import CatalogCache
 from barber_common.auth import Principal
 from barber_common.db.errors import is_unique_violation
 from barber_common.db.session import transaction
@@ -115,11 +116,12 @@ def offered_service(link: MasterService) -> OfferedServiceResponse:
 class CreateMaster:
     """Add a master to a salon and announce it."""
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, cache: CatalogCache) -> None:
         self._session = session
         self._masters = MasterRepository(session)
         self._salons = SalonRepository(session)
         self._outbox = OutboxRepository(session)
+        self._cache = cache
 
     async def execute(self, *, caller: Principal, body: MasterCreateRequest) -> MasterResponse:
         """Create the profile and queue ``master.created`` beside it.
@@ -179,6 +181,8 @@ class CreateMaster:
 
             response = master_response(master)
 
+        await self._cache.invalidate()
+
         _logger.info("master created", master_id=str(master.id), created_by=caller.subject)
         return response
 
@@ -186,9 +190,10 @@ class CreateMaster:
 class UpdateMaster:
     """Change a profile."""
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, cache: CatalogCache) -> None:
         self._session = session
         self._masters = MasterRepository(session)
+        self._cache = cache
 
     async def execute(
         self,
@@ -214,6 +219,8 @@ class UpdateMaster:
             await self._session.flush()
             response = master_response(master)
 
+        await self._cache.invalidate()
+
         _logger.info("master updated", master_id=str(master.id), updated_by=caller.subject)
         return response
 
@@ -221,28 +228,46 @@ class UpdateMaster:
 class ReadMasterCard:
     """One master, with everything they offer, for anybody who asks."""
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, cache: CatalogCache) -> None:
         self._masters = MasterRepository(session)
+        self._cache = cache
 
     async def execute(self, *, master_id: MasterId) -> MasterCardResponse:
         """The profile and its services, each at the price this master charges.
+
+        Read through the cache: this is what a visitor opens when they pick a
+        master, and building it costs three statements with their joins. A miss
+        -- or a cache that is unreachable -- falls through to the database and
+        answers identically.
 
         Services are ordered by name so the card is stable between requests: an
         unordered listing reshuffles itself whenever PostgreSQL feels like it,
         and a visitor comparing two masters sees the difference as noise.
         """
+        key = await self._cache.master_card_key(master_id)
+        cached = await self._cache.read(key, MasterCardResponse)
+        if cached is not None:
+            return cached
+
         master = await self._masters.get_with_offerings(master_id)
         if master is None:
+            # Deliberately not cached. A card that does not exist yet is asked
+            # for by a client that is about to be told to create it, and
+            # storing the absence would make the creation invisible for the
+            # rest of the window.
             raise MasterNotFound("No such master")
 
         services = sorted(
             (offered_service(link) for link in master.offerings),
             key=lambda offered: (offered.name, str(offered.service_id)),
         )
-        return MasterCardResponse(
+        card = MasterCardResponse(
             **master_response(master).model_dump(),
             services=services,
         )
+
+        await self._cache.write(key, card)
+        return card
 
 
 class ListSalonMasters:

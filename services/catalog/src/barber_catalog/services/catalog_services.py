@@ -41,6 +41,7 @@ from barber_catalog.schemas.services import (
     ServiceUpdateRequest,
 )
 from barber_catalog.services.authorization import require_salon_scope
+from barber_catalog.services.cache import CatalogCache
 from barber_common.auth import Principal
 from barber_common.db.session import transaction
 from barber_common.logging import get_logger
@@ -77,10 +78,11 @@ def service_response(service: Service) -> ServiceResponse:
 class CreateService:
     """Add a service to the price list of a salon."""
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, cache: CatalogCache) -> None:
         self._session = session
         self._services = ServiceRepository(session)
         self._salons = SalonRepository(session)
+        self._cache = cache
 
     async def execute(
         self,
@@ -115,6 +117,8 @@ class CreateService:
             )
             response = service_response(service)
 
+        await self._cache.invalidate()
+
         _logger.info("service created", service_id=str(service.id), created_by=caller.subject)
         return response
 
@@ -122,9 +126,10 @@ class CreateService:
 class UpdateService:
     """Change a service."""
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, cache: CatalogCache) -> None:
         self._session = session
         self._services = ServiceRepository(session)
+        self._cache = cache
 
     async def execute(
         self,
@@ -151,6 +156,8 @@ class UpdateService:
             await self._session.flush()
             response = service_response(service)
 
+        await self._cache.invalidate()
+
         _logger.info("service updated", service_id=str(service.id), updated_by=caller.subject)
         return response
 
@@ -158,9 +165,10 @@ class UpdateService:
 class ArchiveService:
     """Withdraw a service from the price list."""
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, cache: CatalogCache) -> None:
         self._session = session
         self._services = ServiceRepository(session)
+        self._cache = cache
 
     async def execute(self, *, caller: Principal, service_id: ServiceId) -> None:
         """Mark the service archived. Repeating this changes nothing.
@@ -187,25 +195,36 @@ class ArchiveService:
             service.is_archived = True
             await self._session.flush()
 
+        await self._cache.invalidate()
+
         _logger.info("service archived", service_id=str(service.id), archived_by=caller.subject)
 
 
 class ReadService:
     """One service, for anybody who asks."""
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, cache: CatalogCache) -> None:
         self._services = ServiceRepository(session)
+        self._cache = cache
 
     async def execute(self, *, service_id: ServiceId) -> ServiceResponse:
-        """Read one service, archived or not.
+        """Read one service, archived or not, through the cache.
 
         The archived ones are the point of this endpoint: a client looking at
         a booking from last year has an identifier and needs a name.
         """
+        key = await self._cache.service_key(service_id)
+        cached = await self._cache.read(key, ServiceResponse)
+        if cached is not None:
+            return cached
+
         service = await self._services.get(service_id)
         if service is None:
             raise ServiceNotFound("No such service")
-        return service_response(service)
+
+        response = service_response(service)
+        await self._cache.write(key, response)
+        return response
 
 
 class ListSalonServices:

@@ -262,6 +262,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "pyjwt", extra = ["crypto"] },
+    { name = "redis" },
     { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "structlog" },
 ]
@@ -286,6 +287,7 @@ requires-dist = [
     { name = "pydantic", specifier = "==2.13.5" },
     { name = "pydantic-settings", specifier = "==2.15.0" },
     { name = "pyjwt", extras = ["crypto"], specifier = "==2.13.0" },
+    { name = "redis", specifier = "==8.1.0" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = "==2.0.52" },
     { name = "structlog", specifier = "==26.1.0" },
 ]

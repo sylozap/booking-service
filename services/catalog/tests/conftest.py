@@ -44,6 +44,7 @@ from barber_common.auth import (
     TokenVerifier,
     use_authentication,
 )
+from barber_common.cache import Cache, cache_from_dsn
 from barber_common.config import Environment
 from barber_common.db import create_engine, get_session
 from barber_common.db.session import transaction
@@ -173,6 +174,50 @@ def app(
     yield application
 
     application.dependency_overrides.clear()
+
+
+@pytest.fixture
+async def cache(redis_dsn: str) -> AsyncIterator[Cache]:
+    """A real Redis, emptied before the test so keys cannot leak between them.
+
+    The generation counter is what makes that necessary: a counter left behind
+    by a previous test would put this one in a namespace whose contents it did
+    not write, which is harmless in production and confusing in a test.
+    """
+    client = cache_from_dsn(redis_dsn, timeout_seconds=1.0)
+    await client.flushdb()
+    built = Cache(client, ttl_seconds=60)
+
+    yield built
+
+    await built.aclose()
+
+
+@pytest.fixture
+def unreachable_cache() -> Cache:
+    """A cache pointed at a port nothing is listening on.
+
+    Port 1 rather than a hostname that does not resolve: a bad name fails
+    differently on different machines, while a closed port refuses the
+    connection everywhere.
+    """
+    return Cache(cache_from_dsn("redis://127.0.0.1:1/0", timeout_seconds=0.05), ttl_seconds=60)
+
+
+@pytest.fixture
+def app_with_cache(app: FastAPI, cache: Cache) -> Iterator[FastAPI]:
+    """The application reading and writing a real cache.
+
+    The plain ``app`` fixture leaves ``app.state.cache`` unset, which the
+    dependency reads as a disabled cache -- so every other test in this suite
+    exercises the uncached path, and the caching is proven only where it is the
+    subject.
+    """
+    app.state.cache = cache
+
+    yield app
+
+    app.state.cache = None
 
 
 def public_pem(key: rsa.RSAPrivateKey) -> str:

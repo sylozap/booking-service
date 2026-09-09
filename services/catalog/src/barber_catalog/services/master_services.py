@@ -37,6 +37,7 @@ from barber_catalog.repositories.masters import MasterRepository
 from barber_catalog.repositories.services import ServiceRepository
 from barber_catalog.schemas.master_services import MasterServiceRequest, MasterServiceResponse
 from barber_catalog.services.authorization import require_salon_scope
+from barber_catalog.services.cache import CatalogCache
 from barber_common.auth import Principal
 from barber_common.db.session import transaction
 from barber_common.logging import get_logger
@@ -76,11 +77,12 @@ def master_service_response(link: MasterService, service: Service) -> MasterServ
 class LinkMasterService:
     """Say that a master offers a service, and on what terms."""
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, cache: CatalogCache) -> None:
         self._session = session
         self._masters = MasterRepository(session)
         self._services = ServiceRepository(session)
         self._links = MasterServiceRepository(session)
+        self._cache = cache
 
     async def execute(
         self,
@@ -135,6 +137,8 @@ class LinkMasterService:
 
             response = master_service_response(link, service)
 
+        await self._cache.invalidate()
+
         _logger.info(
             "master service linked",
             master_id=str(master_id),
@@ -147,10 +151,11 @@ class LinkMasterService:
 class UnlinkMasterService:
     """Say that a master no longer offers a service."""
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, cache: CatalogCache) -> None:
         self._session = session
         self._masters = MasterRepository(session)
         self._links = MasterServiceRepository(session)
+        self._cache = cache
 
     async def execute(
         self,
@@ -184,6 +189,8 @@ class UnlinkMasterService:
 
             link.is_active = False
             await self._session.flush()
+
+        await self._cache.invalidate()
 
         _logger.info(
             "master service unlinked",

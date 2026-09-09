@@ -88,6 +88,20 @@ class BaseAppSettings(BaseSettings):
 
     kafka_bootstrap_servers: str
 
+    # --- cache --------------------------------------------------------------
+    # The cache accelerates reads and decides nothing (ADR-0012), so a
+    # deployment may run without it and the switch is a supported state rather
+    # than a debugging aid. Five minutes is the window
+    # docs/IMPLEMENTATION_PLAN.md T2.7 fixes: long enough to be worth having,
+    # short enough that the race every cache-aside scheme has -- a reader that
+    # started before a write storing what it read after it -- cannot outlive a
+    # coffee break.
+    cache_enabled: bool = True
+    cache_ttl_seconds: int = 300
+    # A cache that has gone slow is worse than one that is gone: without this
+    # the read it exists to accelerate would wait on it.
+    cache_timeout_seconds: float = 0.2
+
     otlp_enabled: bool = False
     otlp_endpoint: str | None = None
 

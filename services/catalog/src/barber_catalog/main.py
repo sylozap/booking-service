@@ -15,6 +15,7 @@ from barber_catalog.api.v1.router import router
 from barber_catalog.settings import ALEMBIC_INI, CatalogSettings
 from barber_common.app import create_app, use_database
 from barber_common.auth import jwks_verifier, refreshing, use_authentication
+from barber_common.cache import Cache, cache_from_dsn
 from barber_common.db import Database, check_schema_is_current, load_config
 from barber_common.db.engine import create_engine_from_settings
 from barber_common.kafka import EventProducer
@@ -50,6 +51,13 @@ def create_application(settings: CatalogSettings | None = None) -> FastAPI:
         # request reaching this pod directly is refused by this pod (ADR-0010).
         jwks, verifier = jwks_verifier(resolved)
 
+        # Deliberately absent from the readiness probe. The cache decides
+        # nothing (ADR-0012) and a read falls through to the database without
+        # it, so failing readiness over Redis would take healthy pods out of
+        # the load balancer for a dependency the service does not need -- the
+        # outage amplifier the probes exist to avoid.
+        app.state.cache = _build_cache(resolved)
+
         async with AsyncExitStack() as stack:
             # The producer is deliberately not started here. The relay connects
             # on its first pass, so a broker that is down delays the events
@@ -60,6 +68,7 @@ def create_application(settings: CatalogSettings | None = None) -> FastAPI:
             # being down at this moment delays the first verification instead
             # of stopping the service from starting.
             await stack.enter_async_context(refreshing(jwks))
+            stack.push_async_callback(app.state.cache.aclose)
             use_authentication(app, verifier)
             yield
 
@@ -71,4 +80,22 @@ def create_application(settings: CatalogSettings | None = None) -> FastAPI:
         routers=[router, internal.router],
         lifespan=lifespan,
         title="Barber Catalog",
+    )
+
+
+def _build_cache(settings: CatalogSettings) -> Cache:
+    """The cache of the running service, or one that stores nothing.
+
+    No connection is made here: redis-py connects lazily, so a Redis that is
+    down at startup delays nothing and the first read simply misses.
+    """
+    if not settings.cache_enabled:
+        return Cache.disabled()
+
+    return Cache(
+        cache_from_dsn(
+            str(settings.redis_dsn.get_secret_value()),
+            timeout_seconds=settings.cache_timeout_seconds,
+        ),
+        ttl_seconds=settings.cache_ttl_seconds,
     )

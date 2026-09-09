@@ -30,6 +30,7 @@ from barber_catalog.schemas.salons import (
     SalonUpdateRequest,
 )
 from barber_catalog.services.authorization import require_salon_scope
+from barber_catalog.services.cache import CatalogCache
 from barber_common.auth import Principal
 from barber_common.db.session import transaction
 from barber_common.logging import get_logger
@@ -68,9 +69,10 @@ def salon_response(salon: Salon) -> SalonResponse:
 class CreateSalon:
     """Open a new salon."""
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, cache: CatalogCache) -> None:
         self._session = session
         self._salons = SalonRepository(session)
+        self._cache = cache
 
     async def execute(self, *, caller: Principal, body: SalonCreateRequest) -> SalonResponse:
         """Create the salon and hand back what now exists.
@@ -98,6 +100,12 @@ class CreateSalon:
             # a state the commit never reached.
             response = salon_response(salon)
 
+        # After the commit, never inside it: Redis and PostgreSQL cannot be
+        # made atomic with each other, and a network call inside an open
+        # transaction holds a pooled connection for its duration
+        # (docs/CODING_STANDARDS.md section 8).
+        await self._cache.invalidate()
+
         _logger.info("salon created", salon_id=str(salon.id), created_by=caller.subject)
         return response
 
@@ -105,9 +113,10 @@ class CreateSalon:
 class UpdateSalon:
     """Change a salon, including its booking policies."""
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, cache: CatalogCache) -> None:
         self._session = session
         self._salons = SalonRepository(session)
+        self._cache = cache
 
     async def execute(
         self,
@@ -140,6 +149,10 @@ class UpdateSalon:
             await self._session.flush()
             # Inside the transaction, for the same reason as in CreateSalon.
             response = salon_response(salon)
+
+        # The policies of a salon are part of the internal answer booking
+        # reads, so a change to them has to reach the cache immediately.
+        await self._cache.invalidate()
 
         _logger.info("salon updated", salon_id=str(salon.id), updated_by=caller.subject)
         return response

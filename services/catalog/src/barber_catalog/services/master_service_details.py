@@ -22,6 +22,7 @@ from barber_catalog.domain.pricing import Offering
 from barber_catalog.repositories.master_services import MasterServiceRepository
 from barber_catalog.repositories.masters import MasterRepository
 from barber_catalog.repositories.salons import SalonRepository
+from barber_catalog.services.cache import CatalogCache
 from barber_common.contracts.catalog import MasterServiceDetails, SalonPolicies
 from barber_common.db.session import transaction
 
@@ -31,11 +32,12 @@ __all__ = ["ReadMasterServiceDetails"]
 class ReadMasterServiceDetails:
     """Describe one master offering one service, for another service."""
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, cache: CatalogCache) -> None:
         self._session = session
         self._masters = MasterRepository(session)
         self._salons = SalonRepository(session)
         self._links = MasterServiceRepository(session)
+        self._cache = cache
 
     async def execute(
         self,
@@ -45,11 +47,17 @@ class ReadMasterServiceDetails:
     ) -> MasterServiceDetails:
         """Read everything at one consistent moment.
 
-        The three reads share a transaction so that a price change landing
-        between them cannot produce an answer where the duration comes from
-        before it and the price from after. Read-only and short: nothing here
-        makes a network call, so no connection is held across one
-        (docs/CODING_STANDARDS.md section 7).
+        The cache is asked first: this is the hot path of the platform, and
+        ``booking`` reads it before every availability calculation. A miss --
+        or a cache that is unreachable -- falls through to the database and
+        answers identically.
+
+        The three database reads share a transaction so that a price change
+        landing between them cannot produce an answer where the duration comes
+        from before it and the price from after. The cache is read before that
+        transaction opens and written after it closes: a network call inside an
+        open transaction holds a pooled connection for its duration
+        (docs/CODING_STANDARDS.md section 8).
 
         **A deactivated master is reported, not refused.** ``master_active``
         false is a complete answer, and it is what lets ``booking`` say
@@ -58,6 +66,11 @@ class ReadMasterServiceDetails:
         nothing to describe -- and that is exactly the signal ``booking`` turns
         into ``service_not_offered``.
         """
+        key = await self._cache.offering_key(master_id, service_id)
+        cached = await self._cache.read(key, MasterServiceDetails)
+        if cached is not None:
+            return cached
+
         async with transaction(self._session):
             master = await self._masters.get(master_id)
             if master is None:
@@ -82,7 +95,7 @@ class ReadMasterServiceDetails:
                 duration_override=link.duration_override,
             )
 
-            return MasterServiceDetails(
+            details = MasterServiceDetails(
                 master_id=master.id,
                 salon_id=salon.id,
                 master_active=master.is_active,
@@ -99,3 +112,6 @@ class ReadMasterServiceDetails:
                     cancel_deadline_min=salon.cancel_deadline_min,
                 ),
             )
+
+        await self._cache.write(key, details)
+        return details
