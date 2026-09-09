@@ -8,9 +8,11 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from barber_catalog.api.v1 import salons
+from barber_catalog.api.v1 import masters, salons
 
 __all__ = ["router"]
 
 router = APIRouter(prefix="/api/v1")
 router.include_router(salons.router)
+router.include_router(masters.router)
+router.include_router(masters.salon_masters_router)

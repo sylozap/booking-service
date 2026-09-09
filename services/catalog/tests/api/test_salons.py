@@ -357,7 +357,7 @@ async def names_across_pages(app: FastAPI, *, limit: int) -> list[str]:
 
     async with app_client(app) as client:
         while True:
-            params: dict[str, object] = {"limit": limit}
+            params: dict[str, str | int] = {"limit": limit}
             if cursor is not None:
                 params["cursor"] = cursor
             page = (await client.get(SALONS, params=params)).json()

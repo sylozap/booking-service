@@ -25,6 +25,7 @@ from barber_common.errors import DomainError
 
 __all__ = [
     "MasterNotFound",
+    "MasterProfileExists",
     "MasterServiceNotFound",
     "SalonNotFound",
     "ServiceArchived",
@@ -59,6 +60,25 @@ class ServiceNotFound(DomainError):
     code = "not_found"
     http_status = 404
     title = "Service not found"
+
+
+class MasterProfileExists(DomainError):
+    """This account already has a profile in this salon.
+
+    ``409`` and not ``422``: both the account and the salon are fine, and so is
+    the request -- what conflicts is the state that already exists. The caller
+    almost certainly wants to edit the profile they already have.
+
+    Not answered silently with the existing profile either, the way a repeated
+    role grant is (docs/04-api-contracts.md). A grant carries nothing but
+    itself, so re-granting is the same state; a profile carries a name, a bio
+    and a photo, and quietly returning the old one would look like a rename
+    that did not take.
+    """
+
+    code = "master_profile_exists"
+    http_status = 409
+    title = "This account already has a profile in this salon"
 
 
 class MasterServiceNotFound(DomainError):
