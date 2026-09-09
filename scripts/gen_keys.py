@@ -14,6 +14,9 @@ Usage::
     # Write the private half to a file for a mounted Secret, print the kid
     python scripts/gen_keys.py --out secrets/auth-signing-key.pem
 
+    # The same, readable by a container that runs as another user
+    python scripts/gen_keys.py --out secrets/auth-signing-key.pem --mode 644
+
     # A single line to paste into .env as JWT_PRIVATE_KEY
     python scripts/gen_keys.py --env
 
@@ -61,8 +64,11 @@ def main() -> int:
     signer = RsaTokenSigner(private_pem)
 
     if arguments.out is not None:
-        _write_private_key(arguments.out, private_pem)
-        print(f"private key written to {arguments.out} (mode 0600)", file=sys.stderr)
+        _write_private_key(arguments.out, private_pem, arguments.mode)
+        print(
+            f"private key written to {arguments.out} (mode {arguments.mode:04o})",
+            file=sys.stderr,
+        )
     elif arguments.env:
         # \n escapes rather than real newlines: pydantic-settings reads the
         # value back as one line, and a multi-line value in .env is not
@@ -93,7 +99,30 @@ def _parse_arguments() -> argparse.Namespace:
         action="store_true",
         help="print the private key as a single JWT_PRIVATE_KEY=... line",
     )
+    parser.add_argument(
+        "--mode",
+        type=_octal_mode,
+        default=0o600,
+        help="file mode for --out, written the way chmod takes it (default 600)",
+    )
     return parser.parse_args()
+
+
+def _octal_mode(value: str) -> int:
+    """Read a file mode the way chmod is given one.
+
+    Octal without needing the ``0o`` prefix, because the number is copied from
+    a chmod line far more often than from Python.
+    """
+    try:
+        mode = int(value, 8)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{value!r} is not an octal file mode") from None
+
+    if not 0 <= mode <= 0o777:
+        raise argparse.ArgumentTypeError(f"{value!r} is outside 0-777")
+
+    return mode
 
 
 def _generate_private_pem() -> str:
@@ -112,7 +141,7 @@ def _generate_private_pem() -> str:
     ).decode("ascii")
 
 
-def _write_private_key(path: Path, private_pem: str) -> None:
+def _write_private_key(path: Path, private_pem: str, mode: int = 0o600) -> None:
     """Store the key, refusing a location git would pick up."""
     if _is_tracked_or_untracked_in_git(path):
         raise SystemExit(
@@ -121,11 +150,17 @@ def _write_private_key(path: Path, private_pem: str) -> None:
         )
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    # The mode is given to open() rather than applied afterwards: a chmod after
-    # the write leaves a window in which the key is on disk readable by
-    # everyone, and that window is all an attacker needs.
+    # Created at 0600 and widened only afterwards, but still before a single
+    # byte of the key exists on disk: a chmod after the write would leave a
+    # window in which the key is readable by everyone, and that window is all
+    # an attacker needs. The widening cannot be folded into the open() flags
+    # instead, because the umask of the caller silently strips bits from the
+    # mode given there -- a developer running with umask 077 would get a 0600
+    # key back and no indication that the mode they asked for was ignored.
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(descriptor, "w", encoding="ascii") as handle:
+        if mode != 0o600:
+            os.fchmod(handle.fileno(), mode)
         handle.write(private_pem)
 
 

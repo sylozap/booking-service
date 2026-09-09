@@ -52,8 +52,15 @@ keys: $(SIGNING_KEY) ## Generate the local RS256 signing key of auth, if absent
 
 # Never regenerated over an existing file: the kid is derived from the key, so
 # replacing it would strand every token already issued against the local stack.
+#
+# 0644 rather than the 0600 the script defaults to. The file is bind-mounted
+# into the auth container, which runs as uid 10001, while this writes it as the
+# developer's own user -- a 0600 key is one the service cannot read, and it
+# fails at startup with a PermissionError. The key here is local, throwaway and
+# ignored by git; a deployed one keeps 0600 and arrives as a Kubernetes Secret
+# rather than from this rule.
 $(SIGNING_KEY):
-	$(UV) run python scripts/gen_keys.py --out $(SIGNING_KEY)
+	$(UV) run python scripts/gen_keys.py --out $(SIGNING_KEY) --mode 644
 
 up: keys ## Start the local environment
 	@test -f $(COMPOSE_FILE) || { echo "$(COMPOSE_FILE) appears in T0.17"; exit 1; }
