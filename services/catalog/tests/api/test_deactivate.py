@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from barber_catalog.models.master import Master
 from barber_catalog.models.salon import Salon
-from barber_common.events.catalog import CATALOG_MASTERS_TOPIC, MasterEventType
+from barber_common.events.catalog import CATALOG_MASTERS_TOPIC, MasterEventType, MasterUpdated
 from barber_common.outbox.models import OutboxMessage
 from barber_common.testing.fixtures import app_client
 
@@ -198,12 +198,17 @@ async def test_activating_does_not_undo_the_cascade(
     make_master: MasterFactory,
     session: AsyncSession,
 ) -> None:
-    """There is no event that would bring the cancelled bookings back.
+    """Reactivation is announced, but nothing announces the bookings coming back.
 
     Reinstating them would double-book whichever slots were taken in the
     meantime -- the invariant the whole platform is built around -- and would
     give clients an appointment they were told they no longer had. This test
     is what stops someone adding such an event later without noticing.
+
+    The ``master.updated`` that follows is a snapshot of the profile, not a
+    restoration: ``booking`` cancels on ``master.deactivated`` alone, and a
+    snapshot saying the master works again says nothing about what was
+    cancelled while they did not.
     """
     salon = await make_salon()
     master = await make_master(salon_id=salon.id)
@@ -214,7 +219,11 @@ async def test_activating_does_not_undo_the_cascade(
         await client.post(activate_url(master), headers=headers)
 
     events = await queued_events(session)
-    assert [event.event_type for event in events] == [MasterEventType.DEACTIVATED.value]
+    assert [event.event_type for event in events] == [
+        MasterEventType.DEACTIVATED.value,
+        MasterEventType.UPDATED.value,
+    ]
+    assert MasterUpdated.model_validate(events[1].payload).is_active is True
 
 
 async def test_activating_twice_is_not_a_failure(

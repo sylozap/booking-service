@@ -16,6 +16,14 @@ is the combination.
 dropping it would mean a master who stops offering something for a month has to
 have their prices entered again. It also makes ``DELETE`` safe to repeat, which
 a delete of an absent row is not.
+
+**Both publish ``master.updated``, keyed by the master.** The six events of
+T2.9 are named after the master and the service aggregates, and the link is
+neither -- but what a master offers is, from the outside, part of that master,
+and it is exactly what the internal endpoint of T2.6 answers with. Without an
+event here, a consumer caching that answer (T3.6) would keep serving a price
+that has been overridden since. Keying it by the master is what keeps it in
+order with the other events about the same profile.
 """
 
 from __future__ import annotations
@@ -38,9 +46,16 @@ from barber_catalog.repositories.services import ServiceRepository
 from barber_catalog.schemas.master_services import MasterServiceRequest, MasterServiceResponse
 from barber_catalog.services.authorization import require_salon_scope
 from barber_catalog.services.cache import CatalogCache
+from barber_catalog.services.masters import master_snapshot
 from barber_common.auth import Principal
 from barber_common.db.session import transaction
+from barber_common.events.catalog import (
+    CATALOG_MASTERS_TOPIC,
+    MASTER_AGGREGATE_TYPE,
+    MasterEventType,
+)
 from barber_common.logging import get_logger
+from barber_common.outbox import OutboxRepository
 
 __all__ = ["LinkMasterService", "UnlinkMasterService", "master_service_response"]
 
@@ -82,6 +97,7 @@ class LinkMasterService:
         self._masters = MasterRepository(session)
         self._services = ServiceRepository(session)
         self._links = MasterServiceRepository(session)
+        self._outbox = OutboxRepository(session)
         self._cache = cache
 
     async def execute(
@@ -135,6 +151,14 @@ class LinkMasterService:
             link.is_active = True
             await self._session.flush()
 
+            await self._outbox.add(
+                topic=CATALOG_MASTERS_TOPIC,
+                aggregate_type=MASTER_AGGREGATE_TYPE,
+                aggregate_id=master.id,
+                event_type=MasterEventType.UPDATED.value,
+                payload=master_snapshot(master),
+            )
+
             response = master_service_response(link, service)
 
         await self._cache.invalidate()
@@ -155,6 +179,7 @@ class UnlinkMasterService:
         self._session = session
         self._masters = MasterRepository(session)
         self._links = MasterServiceRepository(session)
+        self._outbox = OutboxRepository(session)
         self._cache = cache
 
     async def execute(
@@ -188,6 +213,13 @@ class UnlinkMasterService:
                 return
 
             link.is_active = False
+            await self._outbox.add(
+                topic=CATALOG_MASTERS_TOPIC,
+                aggregate_type=MASTER_AGGREGATE_TYPE,
+                aggregate_id=master.id,
+                event_type=MasterEventType.UPDATED.value,
+                payload=master_snapshot(master),
+            )
             await self._session.flush()
 
         await self._cache.invalidate()

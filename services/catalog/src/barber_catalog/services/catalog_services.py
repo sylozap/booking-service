@@ -44,7 +44,16 @@ from barber_catalog.services.authorization import require_salon_scope
 from barber_catalog.services.cache import CatalogCache
 from barber_common.auth import Principal
 from barber_common.db.session import transaction
+from barber_common.events.catalog import (
+    CATALOG_SERVICES_TOPIC,
+    SERVICE_AGGREGATE_TYPE,
+    ServiceArchived,
+    ServiceCreated,
+    ServiceEventType,
+    ServiceUpdated,
+)
 from barber_common.logging import get_logger
+from barber_common.outbox import OutboxRepository
 from barber_common.pagination import Page, PageRequest
 
 __all__ = [
@@ -54,9 +63,28 @@ __all__ = [
     "ReadService",
     "UpdateService",
     "service_response",
+    "service_snapshot",
 ]
 
 _logger = get_logger(__name__)
+
+
+def service_snapshot(service: Service) -> ServiceCreated:
+    """The whole of a service, as ``service.created`` reports it.
+
+    ``ServiceUpdated`` has the same shape deliberately, so a consumer treating
+    the two alike is correct rather than lucky; this builds the created form
+    and the update scenario converts it. One assembly point, because a field
+    added to the payload has to reach both.
+    """
+    return ServiceCreated(
+        service_id=service.id,
+        salon_id=service.salon_id,
+        name=service.name,
+        base_duration_min=service.base_duration_min,
+        base_price=service.base_price,
+        currency=service.currency,
+    )
 
 
 def service_response(service: Service) -> ServiceResponse:
@@ -82,6 +110,7 @@ class CreateService:
         self._session = session
         self._services = ServiceRepository(session)
         self._salons = SalonRepository(session)
+        self._outbox = OutboxRepository(session)
         self._cache = cache
 
     async def execute(
@@ -115,6 +144,13 @@ class CreateService:
                     currency=body.currency,
                 )
             )
+            await self._outbox.add(
+                topic=CATALOG_SERVICES_TOPIC,
+                aggregate_type=SERVICE_AGGREGATE_TYPE,
+                aggregate_id=service.id,
+                event_type=ServiceEventType.CREATED.value,
+                payload=service_snapshot(service),
+            )
             response = service_response(service)
 
         await self._cache.invalidate()
@@ -129,6 +165,7 @@ class UpdateService:
     def __init__(self, session: AsyncSession, cache: CatalogCache) -> None:
         self._session = session
         self._services = ServiceRepository(session)
+        self._outbox = OutboxRepository(session)
         self._cache = cache
 
     async def execute(
@@ -143,6 +180,10 @@ class UpdateService:
         An archived service can still be edited -- correcting the name of
         something withdrawn last year is exactly the case the archive exists
         for -- and archiving itself is not one of the fields.
+
+        **A request that changes nothing publishes nothing.** A form saved
+        without an edit sends the whole body back, and turning every such press
+        into an event would have every consumer doing the work of handling one.
         """
         async with transaction(self._session):
             service = await self._services.get(service_id)
@@ -151,14 +192,35 @@ class UpdateService:
 
             require_salon_scope(caller, service.salon_id)
 
-            for field, value in body.model_dump(exclude_unset=True).items():
+            changes = {
+                field: value
+                for field, value in body.model_dump(exclude_unset=True).items()
+                if getattr(service, field) != value
+            }
+            if not changes:
+                return service_response(service)
+
+            for field, value in changes.items():
                 setattr(service, field, value)
             await self._session.flush()
+
+            await self._outbox.add(
+                topic=CATALOG_SERVICES_TOPIC,
+                aggregate_type=SERVICE_AGGREGATE_TYPE,
+                aggregate_id=service.id,
+                event_type=ServiceEventType.UPDATED.value,
+                payload=ServiceUpdated(**service_snapshot(service).model_dump()),
+            )
             response = service_response(service)
 
         await self._cache.invalidate()
 
-        _logger.info("service updated", service_id=str(service.id), updated_by=caller.subject)
+        _logger.info(
+            "service updated",
+            service_id=str(service.id),
+            updated_by=caller.subject,
+            changed_fields=sorted(changes),
+        )
         return response
 
 
@@ -168,6 +230,7 @@ class ArchiveService:
     def __init__(self, session: AsyncSession, cache: CatalogCache) -> None:
         self._session = session
         self._services = ServiceRepository(session)
+        self._outbox = OutboxRepository(session)
         self._cache = cache
 
     async def execute(self, *, caller: Principal, service_id: ServiceId) -> None:
@@ -193,6 +256,13 @@ class ArchiveService:
                 return
 
             service.is_archived = True
+            await self._outbox.add(
+                topic=CATALOG_SERVICES_TOPIC,
+                aggregate_type=SERVICE_AGGREGATE_TYPE,
+                aggregate_id=service.id,
+                event_type=ServiceEventType.ARCHIVED.value,
+                payload=ServiceArchived(service_id=service.id, salon_id=service.salon_id),
+            )
             await self._session.flush()
 
         await self._cache.invalidate()

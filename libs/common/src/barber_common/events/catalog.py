@@ -19,6 +19,7 @@ chassis (ADR-0016).
 
 from __future__ import annotations
 
+from decimal import Decimal
 from enum import StrEnum
 from uuid import UUID
 
@@ -26,27 +27,40 @@ from pydantic import BaseModel, ConfigDict
 
 __all__ = [
     "CATALOG_MASTERS_TOPIC",
+    "CATALOG_SERVICES_TOPIC",
     "MASTER_AGGREGATE_TYPE",
+    "SERVICE_AGGREGATE_TYPE",
     "MasterCreated",
     "MasterDeactivated",
     "MasterEventType",
+    "MasterUpdated",
+    "ServiceArchived",
+    "ServiceCreated",
+    "ServiceEventType",
+    "ServiceUpdated",
 ]
 
 CATALOG_MASTERS_TOPIC = "catalog.masters.v1"
+CATALOG_SERVICES_TOPIC = "catalog.services.v1"
 
-# The partitioning key of every event here, and the aggregate they belong to.
+# The partitioning key of the events on each topic, and the aggregate they
+# belong to. Two topics rather than one, because ordering is guaranteed within
+# a partition and a partition is chosen by the key: mixing masters and services
+# on one topic would let a service.archived overtake the master.updated that
+# was published first (docs/07-events-and-kafka.md).
 MASTER_AGGREGATE_TYPE = "masters"
+SERVICE_AGGREGATE_TYPE = "services"
 
 
 class MasterEventType(StrEnum):
     """``event_type`` of the envelope, for producer and consumer alike.
 
     A consumer that does not recognise a member logs it and commits: an unknown
-    event type never stops a partition (docs/07-events-and-kafka.md). The
-    remaining member of this topic, ``master.updated``, arrives with T2.9.
+    event type never stops a partition (docs/07-events-and-kafka.md).
     """
 
     CREATED = "master.created"
+    UPDATED = "master.updated"
     DEACTIVATED = "master.deactivated"
 
 
@@ -104,4 +118,83 @@ class MasterDeactivated(_MasterEvent):
     **Reactivation does not undo it.** There is no event for that and there
     could not be a useful one: the bookings were cancelled, the clients were
     told, and the slots have been open to everyone else since.
+    """
+
+
+class MasterUpdated(_MasterEvent):
+    """Something about a master changed, and here is the whole of it now.
+
+    A snapshot rather than a set of changed fields, for two reasons. A consumer
+    applying a snapshot is idempotent for free -- the same event delivered
+    twice leaves the same state -- which matters because delivery is
+    at-least-once (ADR-0007). And a consumer that joined late, or replayed from
+    the start of the topic, reaches the right state from any single event
+    rather than needing every one that came before.
+
+    ``services`` is deliberately not here. What a master offers is published by
+    this event happening at all, not by its contents: a consumer that needs the
+    prices asks the internal endpoint, which is the one place that resolves
+    ``COALESCE(override, base)``. Putting a price list in an event would give
+    the platform a second answer to that question.
+
+    ``timezone`` is not here either, although :class:`MasterCreated` carries
+    it. The zone belongs to the salon and cannot change through an edit of a
+    master, so repeating it would mean loading the salon on every profile
+    change to send a value the consumer already has.
+    """
+
+    user_id: UUID
+    display_name: str
+    specialization: str | None
+    is_active: bool
+
+
+class _ServiceEvent(BaseModel):
+    """What every payload of ``catalog.services.v1`` carries."""
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    service_id: UUID
+    salon_id: UUID
+
+
+class ServiceEventType(StrEnum):
+    """``event_type`` of the envelope, for producer and consumer alike."""
+
+    CREATED = "service.created"
+    UPDATED = "service.updated"
+    ARCHIVED = "service.archived"
+
+
+class ServiceCreated(_ServiceEvent):
+    """A salon added a service to its price list."""
+
+    name: str
+    base_duration_min: int
+    base_price: Decimal
+    currency: str
+
+
+class ServiceUpdated(_ServiceEvent):
+    """A service changed. ``booking`` drops what it cached about it.
+
+    The same snapshot shape as :class:`ServiceCreated`, so a consumer that
+    treats the two alike is correct rather than lucky.
+
+    ``base_price`` is what the salon lists, not what any master charges. The
+    figure a booking is written with comes from the internal endpoint, which
+    resolves the master's override against this.
+    """
+
+    name: str
+    base_duration_min: int
+    base_price: Decimal
+    currency: str
+
+
+class ServiceArchived(_ServiceEvent):
+    """A salon withdrew a service. It is not deleted and never will be.
+
+    Bookings that already name it stay readable, so a consumer must not treat
+    this as a signal to forget the service -- only as one to stop offering it.
     """

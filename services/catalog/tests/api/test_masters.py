@@ -205,24 +205,6 @@ async def test_a_refused_creation_leaves_no_event(
     assert await queued_events(session) == []
 
 
-async def test_changing_a_master_publishes_nothing_yet(
-    app: FastAPI,
-    authorize: AuthorizationFactory,
-    make_salon: SalonFactory,
-    make_master: MasterFactory,
-    session: AsyncSession,
-) -> None:
-    """``master.updated`` belongs to T2.9 and has no consumer yet."""
-    salon = await make_salon()
-    master = await make_master(salon_id=salon.id)
-    headers = authorize(roles=(("super_admin", None),))
-
-    async with app_client(app) as client:
-        await client.patch(f"{MASTERS}/{master.id}", json={"bio": "Ten years"}, headers=headers)
-
-    assert await queued_events(session) == []
-
-
 # --- changing ---------------------------------------------------------------
 
 

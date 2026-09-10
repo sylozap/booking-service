@@ -52,6 +52,7 @@ from barber_common.events.catalog import (
     MasterCreated,
     MasterDeactivated,
     MasterEventType,
+    MasterUpdated,
 )
 from barber_common.logging import get_logger
 from barber_common.outbox import OutboxRepository
@@ -60,6 +61,7 @@ from barber_common.pagination import Page, PageRequest
 __all__ = [
     "ActivateMaster",
     "CreateMaster",
+    "master_snapshot",
     "DeactivateMaster",
     "ListSalonMasters",
     "ReadMasterCard",
@@ -84,6 +86,24 @@ def master_response(master: Master) -> MasterResponse:
         is_active=master.is_active,
         created_at=master.created_at,
         updated_at=master.updated_at,
+    )
+
+
+def master_snapshot(master: Master) -> MasterUpdated:
+    """The whole of a master, as ``master.updated`` reports it.
+
+    In one place because four scenarios publish this event -- an edit, a
+    reactivation, and both sides of the offering endpoint -- and a snapshot
+    assembled separately in each is four chances for one of them to omit a
+    field a consumer relies on.
+    """
+    return MasterUpdated(
+        master_id=master.id,
+        salon_id=master.salon_id,
+        user_id=master.user_id,
+        display_name=master.display_name,
+        specialization=master.specialization,
+        is_active=master.is_active,
     )
 
 
@@ -196,6 +216,7 @@ class UpdateMaster:
     def __init__(self, session: AsyncSession, cache: CatalogCache) -> None:
         self._session = session
         self._masters = MasterRepository(session)
+        self._outbox = OutboxRepository(session)
         self._cache = cache
 
     async def execute(
@@ -205,10 +226,15 @@ class UpdateMaster:
         master_id: MasterId,
         body: MasterUpdateRequest,
     ) -> MasterResponse:
-        """Apply the fields the caller actually sent.
+        """Apply the fields the caller actually sent, and announce the change.
 
-        No event here. ``master.updated`` belongs to T2.9, and publishing one
-        now would announce a schema no consumer has agreed to yet.
+        **A request that changes nothing publishes nothing.** A client that
+        sends the profile back unaltered -- which is what a form does when the
+        user presses save without editing -- would otherwise put an event on
+        the topic for every such press, and every consumer would do the work of
+        handling it. One event per actual change is what T2.9 asks for, and
+        comparing before assigning is what makes it true rather than
+        approximately true.
         """
         async with transaction(self._session):
             master = await self._masters.get(master_id)
@@ -217,14 +243,35 @@ class UpdateMaster:
 
             require_salon_scope(caller, master.salon_id)
 
-            for field, value in body.model_dump(exclude_unset=True).items():
+            changes = {
+                field: value
+                for field, value in body.model_dump(exclude_unset=True).items()
+                if getattr(master, field) != value
+            }
+            if not changes:
+                return master_response(master)
+
+            for field, value in changes.items():
                 setattr(master, field, value)
             await self._session.flush()
+
+            await self._outbox.add(
+                topic=CATALOG_MASTERS_TOPIC,
+                aggregate_type=MASTER_AGGREGATE_TYPE,
+                aggregate_id=master.id,
+                event_type=MasterEventType.UPDATED.value,
+                payload=master_snapshot(master),
+            )
             response = master_response(master)
 
         await self._cache.invalidate()
 
-        _logger.info("master updated", master_id=str(master.id), updated_by=caller.subject)
+        _logger.info(
+            "master updated",
+            master_id=str(master.id),
+            updated_by=caller.subject,
+            changed_fields=sorted(changes),
+        )
         return response
 
 
@@ -368,6 +415,7 @@ class ActivateMaster:
     def __init__(self, session: AsyncSession, cache: CatalogCache) -> None:
         self._session = session
         self._masters = MasterRepository(session)
+        self._outbox = OutboxRepository(session)
         self._cache = cache
 
     async def execute(self, *, caller: Principal, master_id: MasterId) -> MasterResponse:
@@ -382,11 +430,14 @@ class ActivateMaster:
         Rebooking is a client's decision, not a side effect of an
         administrator's.
 
-        Repeating the call changes nothing and still succeeds: the requested
-        state is the state that holds.
+        Repeating the call changes nothing, publishes nothing, and still
+        succeeds: the requested state is the state that holds.
 
-        No event yet. ``master.updated`` arrives with T2.9, and publishing an
-        event no consumer has agreed to a schema for buys nothing.
+        The event is ``master.updated`` and not a ``master.activated`` of its
+        own. The topic has three types (docs/07-events-and-kafka.md) and a
+        consumer applying the snapshot reaches the right state from this one
+        exactly as it would from any other update -- a fourth type would be a
+        second way to say the same thing.
         """
         async with transaction(self._session):
             master = await self._masters.get(master_id)
@@ -400,6 +451,14 @@ class ActivateMaster:
 
             master.is_active = True
             await self._session.flush()
+
+            await self._outbox.add(
+                topic=CATALOG_MASTERS_TOPIC,
+                aggregate_type=MASTER_AGGREGATE_TYPE,
+                aggregate_id=master.id,
+                event_type=MasterEventType.UPDATED.value,
+                payload=master_snapshot(master),
+            )
             response = master_response(master)
 
         await self._cache.invalidate()
