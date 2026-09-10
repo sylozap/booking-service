@@ -12,7 +12,9 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query, status
 
 from barber_catalog.api.v1.dependencies import (
+    ActivateMasterScenario,
     CreateMasterScenario,
+    DeactivateMasterScenario,
     ListSalonMastersScenario,
     ReadMasterCardScenario,
     UpdateMasterScenario,
@@ -142,3 +144,66 @@ async def list_salon_masters(
     return await scenario.execute(
         salon_id=SalonId(salon_id), request=pagination, is_active=is_active
     )
+
+
+@router.post(
+    "/{master_id}/deactivate",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Stop a master working",
+    responses={
+        status.HTTP_403_FORBIDDEN: {"description": "Not an administrator of this salon"},
+        status.HTTP_404_NOT_FOUND: {"description": "No such master"},
+    },
+)
+async def deactivate_master(
+    master_id: UUID,
+    caller: SalonAdministrator,
+    scenario: DeactivateMasterScenario,
+) -> MasterResponse:
+    """Take a master off the schedule and cancel what they had booked.
+
+    **`202`, not `200`, and the difference is real.** The profile is marked
+    inactive before this answers. The cancellations are not: `booking` consumes
+    `master.deactivated` and cancels every future booking of this master as
+    `cancelled_by_salon`, which happens shortly afterwards and not within this
+    request. A client reading the bookings immediately may still see them.
+
+    The master leaves `?is_active=true` listings at once and stays readable by
+    identifier, because their past bookings still name them.
+
+    Repeating the call is safe and publishes no second event. That matters more
+    than it looks: a second event would make `booking` run the cancellation
+    again, and a booking reinstated in between would be cancelled a second time
+    without anyone having asked.
+
+    **Reactivating does not bring the bookings back** -- see
+    `POST .../activate`.
+    """
+    return await scenario.execute(caller=caller, master_id=MasterId(master_id))
+
+
+@router.post(
+    "/{master_id}/activate",
+    summary="Put a master back to work",
+    responses={
+        status.HTTP_403_FORBIDDEN: {"description": "Not an administrator of this salon"},
+        status.HTTP_404_NOT_FOUND: {"description": "No such master"},
+    },
+)
+async def activate_master(
+    master_id: UUID,
+    caller: SalonAdministrator,
+    scenario: ActivateMasterScenario,
+) -> MasterResponse:
+    """Make a deactivated master bookable again.
+
+    **The bookings cancelled by the deactivation are not restored, and there is
+    no way to restore them.** Their clients were told the appointment was off,
+    and the slots have been open to everyone else since; reinstating them would
+    double-book whichever have been taken in the meantime. Those clients book
+    again, which is their decision to make rather than a side effect of an
+    administrator's.
+
+    Repeating the call changes nothing and still answers `200`.
+    """
+    return await scenario.execute(caller=caller, master_id=MasterId(master_id))

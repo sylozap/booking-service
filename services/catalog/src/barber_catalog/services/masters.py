@@ -50,6 +50,7 @@ from barber_common.events.catalog import (
     CATALOG_MASTERS_TOPIC,
     MASTER_AGGREGATE_TYPE,
     MasterCreated,
+    MasterDeactivated,
     MasterEventType,
 )
 from barber_common.logging import get_logger
@@ -57,7 +58,9 @@ from barber_common.outbox import OutboxRepository
 from barber_common.pagination import Page, PageRequest
 
 __all__ = [
+    "ActivateMaster",
     "CreateMaster",
+    "DeactivateMaster",
     "ListSalonMasters",
     "ReadMasterCard",
     "UpdateMaster",
@@ -303,3 +306,103 @@ class ListSalonMasters:
             items=[master_response(master) for master in page.items],
             next_cursor=page.next_cursor,
         )
+
+
+class DeactivateMaster:
+    """Stop a master working, and let ``booking`` cancel what they had booked."""
+
+    def __init__(self, session: AsyncSession, cache: CatalogCache) -> None:
+        self._session = session
+        self._masters = MasterRepository(session)
+        self._outbox = OutboxRepository(session)
+        self._cache = cache
+
+    async def execute(self, *, caller: Principal, master_id: MasterId) -> MasterResponse:
+        """Mark the master inactive and queue ``master.deactivated`` beside it.
+
+        **The consequences are not local.** ``booking`` consumes this event and
+        cancels every future booking of this master (T4.6), which is why the
+        endpoint answers ``202`` rather than ``200``: the row is written, the
+        cancellations are not, and telling the caller otherwise would be a lie
+        it can observe by immediately reading the bookings.
+
+        Repeating the call writes nothing and queues nothing. Idempotence here
+        is not a nicety: a second event would make ``booking`` cancel a second
+        time, and a client whose booking was reinstated in between would lose
+        it again without anyone having asked.
+        """
+        async with transaction(self._session):
+            master = await self._masters.get(master_id)
+            if master is None:
+                raise MasterNotFound("No such master")
+
+            require_salon_scope(caller, master.salon_id)
+
+            if not master.is_active:
+                return master_response(master)
+
+            master.is_active = False
+            await self._outbox.add(
+                topic=CATALOG_MASTERS_TOPIC,
+                aggregate_type=MASTER_AGGREGATE_TYPE,
+                aggregate_id=master.id,
+                event_type=MasterEventType.DEACTIVATED.value,
+                payload=MasterDeactivated(master_id=master.id, salon_id=master.salon_id),
+            )
+            await self._session.flush()
+            response = master_response(master)
+
+        await self._cache.invalidate()
+
+        _logger.info(
+            "master deactivated",
+            master_id=str(master.id),
+            deactivated_by=caller.subject,
+        )
+        return response
+
+
+class ActivateMaster:
+    """Put a master back to work."""
+
+    def __init__(self, session: AsyncSession, cache: CatalogCache) -> None:
+        self._session = session
+        self._masters = MasterRepository(session)
+        self._cache = cache
+
+    async def execute(self, *, caller: Principal, master_id: MasterId) -> MasterResponse:
+        """Mark the master active again.
+
+        **Nothing is restored.** The bookings cancelled when they were
+        deactivated stay cancelled: the clients were told, and the slots have
+        been open to everyone else since. Reinstating them would double-book
+        the ones that were taken in the meantime -- which is the invariant the
+        whole platform is built around -- and silently reinstating the rest
+        would give clients an appointment they were told they no longer had.
+        Rebooking is a client's decision, not a side effect of an
+        administrator's.
+
+        Repeating the call changes nothing and still succeeds: the requested
+        state is the state that holds.
+
+        No event yet. ``master.updated`` arrives with T2.9, and publishing an
+        event no consumer has agreed to a schema for buys nothing.
+        """
+        async with transaction(self._session):
+            master = await self._masters.get(master_id)
+            if master is None:
+                raise MasterNotFound("No such master")
+
+            require_salon_scope(caller, master.salon_id)
+
+            if master.is_active:
+                return master_response(master)
+
+            master.is_active = True
+            await self._session.flush()
+            response = master_response(master)
+
+        await self._cache.invalidate()
+
+        _logger.info("master activated", master_id=str(master.id), activated_by=caller.subject)
+        return response

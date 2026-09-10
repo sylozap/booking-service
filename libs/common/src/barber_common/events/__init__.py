@@ -9,6 +9,7 @@ from barber_common.events.catalog import (
     CATALOG_MASTERS_TOPIC,
     MASTER_AGGREGATE_TYPE,
     MasterCreated,
+    MasterDeactivated,
     MasterEventType,
 )
 from barber_common.events.envelope import (
@@ -37,6 +38,7 @@ __all__ = [
     "EventEnvelope",
     "JsonEnvelope",
     "MasterCreated",
+    "MasterDeactivated",
     "MasterEventType",
     "UserContactsUpdated",
     "UserDeactivated",

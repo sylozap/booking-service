@@ -28,6 +28,7 @@ __all__ = [
     "CATALOG_MASTERS_TOPIC",
     "MASTER_AGGREGATE_TYPE",
     "MasterCreated",
+    "MasterDeactivated",
     "MasterEventType",
 ]
 
@@ -42,11 +43,11 @@ class MasterEventType(StrEnum):
 
     A consumer that does not recognise a member logs it and commits: an unknown
     event type never stops a partition (docs/07-events-and-kafka.md). The
-    remaining members of this topic -- ``master.updated`` and
-    ``master.deactivated`` -- arrive with T2.8 and T2.9.
+    remaining member of this topic, ``master.updated``, arrives with T2.9.
     """
 
     CREATED = "master.created"
+    DEACTIVATED = "master.deactivated"
 
 
 class _MasterEvent(BaseModel):
@@ -82,3 +83,25 @@ class MasterCreated(_MasterEvent):
     display_name: str
     timezone: str
     is_active: bool
+
+
+class MasterDeactivated(_MasterEvent):
+    """A master has stopped working. Their future bookings are cancelled.
+
+    **This is the one event in the platform that changes another service's
+    state as a cascade** (docs/03-services.md): ``booking`` consumes it and
+    cancels every future booking of this master with
+    ``cancelled_by_salon``. That is why the endpoint answers ``202`` -- the
+    cancellations have not happened yet when the caller is told the master is
+    deactivated.
+
+    It carries nothing but the identity. A cascade needs to know **who**, and
+    every other fact about the master is either already in ``booking`` or
+    irrelevant to cancelling an appointment. A payload that carried the profile
+    would invite a consumer to treat this as an update as well, and the two
+    have very different consequences.
+
+    **Reactivation does not undo it.** There is no event for that and there
+    could not be a useful one: the bookings were cancelled, the clients were
+    told, and the slots have been open to everyone else since.
+    """

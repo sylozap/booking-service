@@ -42,6 +42,14 @@ class MasterUpdateRequest(BaseModel):
     another salon or onto another account is not an edit of a profile, it is a
     different profile. Both are part of the identity the unique index is built
     on.
+
+    ``is_active`` is absent for a stronger reason. Deactivating a master
+    cancels every future booking they have, through an event ``booking``
+    consumes (T2.8). A consequence like that cannot hang off a field of a
+    general-purpose edit, where a client sending the whole profile back would
+    trigger it by accident. It is ``POST .../deactivate`` and
+    ``POST .../activate``, exactly as withdrawing a service is its own endpoint
+    rather than a flag on this one.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -50,7 +58,6 @@ class MasterUpdateRequest(BaseModel):
     bio: str | None = Field(default=None, max_length=5000)
     photo_url: str | None = Field(default=None, max_length=1000)
     specialization: str | None = Field(default=None, max_length=200)
-    is_active: bool | None = None
 
 
 class MasterResponse(BaseModel):

@@ -33,7 +33,9 @@ from barber_catalog.services.master_services import (
     UnlinkMasterService,
 )
 from barber_catalog.services.masters import (
+    ActivateMaster,
     CreateMaster,
+    DeactivateMaster,
     ListSalonMasters,
     ReadMasterCard,
     UpdateMaster,
@@ -43,11 +45,13 @@ from barber_common.cache import Cache
 from barber_common.db.session import get_session
 
 __all__ = [
+    "ActivateMasterScenario",
     "ArchiveServiceScenario",
     "CacheDependency",
     "CreateMasterScenario",
     "CreateSalonScenario",
     "CreateServiceScenario",
+    "DeactivateMasterScenario",
     "LinkMasterServiceScenario",
     "ListSalonMastersScenario",
     "ListSalonServicesScenario",
@@ -129,7 +133,19 @@ def build_list_salon_masters(session: SessionDependency) -> ListSalonMasters:
     return ListSalonMasters(session)
 
 
+def build_deactivate_master(session: SessionDependency, cache: CacheDependency) -> DeactivateMaster:
+    """The deactivation scenario for this request."""
+    return DeactivateMaster(session, cache)
+
+
+def build_activate_master(session: SessionDependency, cache: CacheDependency) -> ActivateMaster:
+    """The reactivation scenario for this request."""
+    return ActivateMaster(session, cache)
+
+
 CreateMasterScenario = Annotated[CreateMaster, Depends(build_create_master)]
+DeactivateMasterScenario = Annotated[DeactivateMaster, Depends(build_deactivate_master)]
+ActivateMasterScenario = Annotated[ActivateMaster, Depends(build_activate_master)]
 UpdateMasterScenario = Annotated[UpdateMaster, Depends(build_update_master)]
 ReadMasterCardScenario = Annotated[ReadMasterCard, Depends(build_read_master_card)]
 ListSalonMastersScenario = Annotated[ListSalonMasters, Depends(build_list_salon_masters)]
