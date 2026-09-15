@@ -37,22 +37,13 @@ class ServiceRepository:
         return service
 
     async def get(self, service_id: ServiceId) -> Service | None:
-        """One service by identifier, archived or not.
-
-        Archived services are deliberately still returned. A booking made a
-        year ago names this row, and the history has to be readable; it is the
-        listing that hides it (T2.4).
-        """
+        """One service by identifier, archived or not."""
         return await self._session.get(Service, service_id)
 
     async def page(self, *, salon_id: SalonId, request: PageRequest) -> Sequence[Service]:
         """One window of the price list of a salon, ordered by name.
 
-        Archived services never appear here, and there is no parameter to ask
-        for them. Archiving is how a salon withdraws an offering, and a listing
-        that could show withdrawn ones would need every caller to remember to
-        filter -- which is the mistake the flag exists to prevent. A service
-        that has to be inspected after archiving is fetched by identifier.
+        Archived services are never listed.
         """
         statement = select(Service).where(
             Service.salon_id == salon_id,

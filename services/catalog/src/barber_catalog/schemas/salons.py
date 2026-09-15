@@ -9,11 +9,8 @@ from zoneinfo import ZoneInfo
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 
-# The four policy defaults come from the model, where the database default
-# of the same value lives. One source rather than two that have to agree:
-# only the numbers are imported, never the ORM class -- what section 5 of
-# docs/CODING_STANDARDS.md forbids is a model reaching an API response, and
-# these are the values OpenAPI has to publish.
+# The policy defaults are taken from the model, where the database defaults are
+# defined.
 from barber_catalog.models.salon import (
     DEFAULT_BOOKING_HORIZON_DAYS,
     DEFAULT_BOOKING_MIN_LEAD_MIN,
@@ -27,11 +24,7 @@ __all__ = ["SalonCreateRequest", "SalonResponse", "SalonUpdateRequest", "Timezon
 def _known_timezone(value: str) -> str:
     """Refuse anything that is not an IANA identifier.
 
-    A ``ValueError``, so pydantic turns it into the platform's ordinary
-    ``422`` with a ``violations`` entry naming the field. The same rule is
-    restated in :class:`~barber_catalog.models.salon.Salon` as the backstop for
-    write paths that do not come through a request body; models may not import
-    this module, and both checks are one call to ``ZoneInfo``.
+    Raises ``ValueError``, which pydantic reports as ``422``.
     """
     try:
         ZoneInfo(value)
@@ -52,12 +45,7 @@ TimezoneName = Annotated[
 
 
 class SalonPolicyFields(BaseModel):
-    """The four settings of docs/02-domain-rules.md.
-
-    Stored on the salon and applied in ``booking``: the salon owns the rule,
-    the service holding the bookings enforces it, and the internal endpoint of
-    T2.6 is how the second learns the first.
-    """
+    """The four booking policies of a salon, applied by ``booking``."""
 
     slot_step_min: int = Field(
         default=DEFAULT_SLOT_STEP_MIN,
@@ -99,10 +87,7 @@ class SalonCreateRequest(SalonPolicyFields):
 class SalonUpdateRequest(BaseModel):
     """A change to a salon. Every field is optional; absent means untouched.
 
-    Absent and null are different: ``description: null`` clears the text,
-    ``description`` missing leaves it alone. That is what ``exclude_unset``
-    gives the scenario, and it is why this cannot simply reuse the create
-    schema with defaults.
+    ``null`` clears a field, while a missing field is left alone.
     """
 
     model_config = ConfigDict(extra="forbid")

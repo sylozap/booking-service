@@ -1,19 +1,7 @@
 """Creating, changing and reading master profiles.
 
-**Creating a master publishes an event, and it does so through the outbox.**
-``booking`` needs a ``master_settings`` row before a schedule can be written
-against the profile (docs/03-services.md), and that row is created by
-``master.created``. The event is written in the same transaction as the profile
-itself: publishing to the broker after the commit would lose the event whenever
-the broker blinks, and publishing before it would announce a master that the
-rollback then took away (ADR-0004).
-
-**The account behind a profile is not checked.** ``user_id`` names a row in
-``auth`` and no call is made to find out whether it is there. A synchronous
-cross-service validation on a write path buys very little -- the account can be
-deleted a second later anyway -- and costs the availability of ``catalog``
-whenever ``auth`` is slow. A profile naming an account that does not exist is a
-data error, not a broken system (T2.3).
+Creating a master writes ``master.created`` to the outbox in the same
+transaction. ``user_id`` is not checked against ``auth``.
 """
 
 from __future__ import annotations
@@ -90,13 +78,7 @@ def master_response(master: Master) -> MasterResponse:
 
 
 def master_snapshot(master: Master) -> MasterUpdated:
-    """The whole of a master, as ``master.updated`` reports it.
-
-    In one place because four scenarios publish this event -- an edit, a
-    reactivation, and both sides of the offering endpoint -- and a snapshot
-    assembled separately in each is four chances for one of them to omit a
-    field a consumer relies on.
-    """
+    """The whole of a master, as ``master.updated`` reports it."""
     return MasterUpdated(
         master_id=master.id,
         salon_id=master.salon_id,
@@ -110,13 +92,7 @@ def master_snapshot(master: Master) -> MasterUpdated:
 def offered_service(link: MasterService) -> OfferedServiceResponse:
     """Map one link to the card entry, resolving the final figures.
 
-    The resolution goes through :class:`Offering` and never through a
-    ``coalesce`` written here: the internal endpoint of T2.6 answers the same
-    question for ``booking``, and two copies of the rule are two answers
-    waiting to differ.
-
-    Requires ``link.service`` to be loaded -- the relationship raises rather
-    than lazily loading, and the repository that hands these over says so.
+    Resolved through :class:`Offering`. Requires ``link.service`` to be loaded.
     """
     offering = Offering(
         base_price=link.service.base_price,
@@ -149,10 +125,8 @@ class CreateMaster:
     async def execute(self, *, caller: Principal, body: MasterCreateRequest) -> MasterResponse:
         """Create the profile and queue ``master.created`` beside it.
 
-        The salon is loaded first because two things need it: the scope check,
-        which is a question about this salon, and the time zone, which travels
-        in the event so that ``booking`` can build ``master_settings`` without
-        calling back.
+        The salon is loaded for the scope check and for the time zone the event
+        carries.
         """
         async with transaction(self._session):
             salon = await self._salons.get(SalonId(body.salon_id))
@@ -173,20 +147,15 @@ class CreateMaster:
                     )
                 )
             except IntegrityError as error:
-                # The constraint is named, not merely the SQLSTATE: this table
-                # could grow a second unique index tomorrow, and reporting
-                # every 23505 as "this master already exists" would then be
-                # wrong in a way nobody notices
-                # (docs/CODING_STANDARDS.md section 8).
+                # Matched by constraint name, not only by SQLSTATE, so another
+                # unique index is not misreported.
                 if not is_unique_violation(error, constraint="uq_masters_user_id_salon_id"):
                     raise
                 raise MasterProfileExists(
                     "This account already has a profile in this salon"
                 ) from error
 
-            # Same transaction as the row above. The partitioning key is the
-            # master, so everything that ever happens to this profile stays in
-            # order on the topic (docs/07-events-and-kafka.md).
+            # Same transaction as the row above, keyed by the master.
             await self._outbox.add(
                 topic=CATALOG_MASTERS_TOPIC,
                 aggregate_type=MASTER_AGGREGATE_TYPE,
@@ -228,13 +197,7 @@ class UpdateMaster:
     ) -> MasterResponse:
         """Apply the fields the caller actually sent, and announce the change.
 
-        **A request that changes nothing publishes nothing.** A client that
-        sends the profile back unaltered -- which is what a form does when the
-        user presses save without editing -- would otherwise put an event on
-        the topic for every such press, and every consumer would do the work of
-        handling it. One event per actual change is what T2.9 asks for, and
-        comparing before assigning is what makes it true rather than
-        approximately true.
+        A request that changes nothing publishes nothing.
         """
         async with transaction(self._session):
             master = await self._masters.get(master_id)
@@ -285,14 +248,7 @@ class ReadMasterCard:
     async def execute(self, *, master_id: MasterId) -> MasterCardResponse:
         """The profile and its services, each at the price this master charges.
 
-        Read through the cache: this is what a visitor opens when they pick a
-        master, and building it costs three statements with their joins. A miss
-        -- or a cache that is unreachable -- falls through to the database and
-        answers identically.
-
-        Services are ordered by name so the card is stable between requests: an
-        unordered listing reshuffles itself whenever PostgreSQL feels like it,
-        and a visitor comparing two masters sees the difference as noise.
+        Read through the cache. Services are ordered by name.
         """
         key = await self._cache.master_card_key(master_id)
         cached = await self._cache.read(key, MasterCardResponse)
@@ -301,10 +257,8 @@ class ReadMasterCard:
 
         master = await self._masters.get_with_offerings(master_id)
         if master is None:
-            # Deliberately not cached. A card that does not exist yet is asked
-            # for by a client that is about to be told to create it, and
-            # storing the absence would make the creation invisible for the
-            # rest of the window.
+            # A missing card is not cached, so a profile created right after is
+            # visible immediately.
             raise MasterNotFound("No such master")
 
         services = sorted(
@@ -367,16 +321,8 @@ class DeactivateMaster:
     async def execute(self, *, caller: Principal, master_id: MasterId) -> MasterResponse:
         """Mark the master inactive and queue ``master.deactivated`` beside it.
 
-        **The consequences are not local.** ``booking`` consumes this event and
-        cancels every future booking of this master (T4.6), which is why the
-        endpoint answers ``202`` rather than ``200``: the row is written, the
-        cancellations are not, and telling the caller otherwise would be a lie
-        it can observe by immediately reading the bookings.
-
-        Repeating the call writes nothing and queues nothing. Idempotence here
-        is not a nicety: a second event would make ``booking`` cancel a second
-        time, and a client whose booking was reinstated in between would lose
-        it again without anyone having asked.
+        ``booking`` cancels the master's future bookings asynchronously, hence
+        ``202``. Repeating the call writes and queues nothing.
         """
         async with transaction(self._session):
             master = await self._masters.get(master_id)
@@ -419,25 +365,10 @@ class ActivateMaster:
         self._cache = cache
 
     async def execute(self, *, caller: Principal, master_id: MasterId) -> MasterResponse:
-        """Mark the master active again.
+        """Mark the master active again and publish ``master.updated``.
 
-        **Nothing is restored.** The bookings cancelled when they were
-        deactivated stay cancelled: the clients were told, and the slots have
-        been open to everyone else since. Reinstating them would double-book
-        the ones that were taken in the meantime -- which is the invariant the
-        whole platform is built around -- and silently reinstating the rest
-        would give clients an appointment they were told they no longer had.
-        Rebooking is a client's decision, not a side effect of an
-        administrator's.
-
-        Repeating the call changes nothing, publishes nothing, and still
-        succeeds: the requested state is the state that holds.
-
-        The event is ``master.updated`` and not a ``master.activated`` of its
-        own. The topic has three types (docs/07-events-and-kafka.md) and a
-        consumer applying the snapshot reaches the right state from this one
-        exactly as it would from any other update -- a fourth type would be a
-        second way to say the same thing.
+        Bookings cancelled on deactivation are not restored. Repeating the call
+        changes and publishes nothing.
         """
         async with transaction(self._session):
             master = await self._masters.get(master_id)

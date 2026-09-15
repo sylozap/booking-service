@@ -20,17 +20,9 @@ __all__ = ["Master"]
 class Master(Base):
     """One master, inside one salon.
 
-    The master is split across two services by "who they are" against "when
-    they work" (docs/03-services.md): the profile and the offerings live here,
-    the buffer and the weekly schedule live in ``booking``, keyed by the same
-    identifier. ``is_active`` is the source of truth for both, which is why
-    deactivating one (T2.8) publishes an event rather than only writing a row.
-
-    ``user_id`` points at an account in ``auth`` and carries no foreign key: no
-    constraint of this database may reach into another service. Whether the
-    account exists is not checked here either -- a cross-service validation of
-    a profile field does not pay for itself, and a profile naming an account
-    that was never created is a data error rather than a broken system (T2.3).
+    The profile and offered services live here; the buffer and weekly schedule
+    live in ``booking`` under the same identifier. ``user_id`` names an account
+    in ``auth`` and is neither a foreign key nor verified.
     """
 
     __tablename__ = "masters"
@@ -50,10 +42,7 @@ class Master(Base):
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
 
-    # ``lazy="raise"`` is the project-wide rule (docs/CODING_STANDARDS.md
-    # section 8): the card of T2.3 and the internal endpoint of T2.6 load this
-    # with an explicit ``selectinload``, and anything that forgets to gets an
-    # exception instead of an N+1 that only shows up under load.
+    # ``lazy="raise"``: callers load this explicitly with ``selectinload``.
     offerings: Mapped[list[MasterService]] = relationship(
         back_populates="master",
         lazy="raise",
@@ -64,7 +53,6 @@ class Master(Base):
         # One profile per account per salon. The same person may be a master in
         # two salons, and that is two profiles, not one.
         Index("uq_masters_user_id_salon_id", "user_id", "salon_id", unique=True),
-        # The listing of T2.3: the masters of one salon, optionally only the
-        # active ones. Named by docs/05-data-model.md.
+        # The masters of one salon, optionally only the active ones.
         Index("ix_masters_salon_id_is_active", "salon_id", "is_active"),
     )

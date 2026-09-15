@@ -1,9 +1,4 @@
-"""The one rule of the catalog, tested without a database in sight.
-
-Written before the endpoints that use it: both the master card (T2.3) and the
-internal endpoint booking reads (T2.6) go through this, and a table of cases is
-cheaper here than through two HTTP surfaces.
-"""
+"""The pricing rule of the catalog, tested without a database."""
 
 from __future__ import annotations
 

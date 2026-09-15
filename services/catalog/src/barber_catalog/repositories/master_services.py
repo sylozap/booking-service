@@ -35,9 +35,7 @@ class MasterServiceRepository:
     ) -> MasterService | None:
         """One active link together with the service behind it.
 
-        What the internal endpoint of T2.6 reads. ``selectinload`` because the
-        relationship raises rather than lazily loading, and the base price and
-        duration on the other side are exactly what is being asked for.
+        The service is loaded with ``selectinload``.
         """
         statement = (
             select(MasterService)

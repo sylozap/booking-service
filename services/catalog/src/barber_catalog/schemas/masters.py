@@ -38,18 +38,8 @@ class MasterCreateRequest(BaseModel):
 class MasterUpdateRequest(BaseModel):
     """A change to a profile. Absent fields are left alone.
 
-    ``salon_id`` and ``user_id`` are absent on purpose: moving a master to
-    another salon or onto another account is not an edit of a profile, it is a
-    different profile. Both are part of the identity the unique index is built
-    on.
-
-    ``is_active`` is absent for a stronger reason. Deactivating a master
-    cancels every future booking they have, through an event ``booking``
-    consumes (T2.8). A consequence like that cannot hang off a field of a
-    general-purpose edit, where a client sending the whole profile back would
-    trigger it by accident. It is ``POST .../deactivate`` and
-    ``POST .../activate``, exactly as withdrawing a service is its own endpoint
-    rather than a flag on this one.
+    ``salon_id`` and ``user_id`` cannot be changed. ``is_active`` is changed only
+    through the deactivate and activate endpoints.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -78,11 +68,8 @@ class MasterResponse(BaseModel):
 class OfferedServiceResponse(BaseModel):
     """One service on a master's card, at the price that master charges.
 
-    ``price`` and ``duration_min`` are already resolved -- the master's
-    override where there is one, the salon's base figure otherwise. The base
-    figures are shown next to them so a client can see that this master is
-    dearer or slower than the salon's list, which is the question the card
-    exists to answer.
+    ``price`` and ``duration_min`` are resolved; the salon's base figures are
+    shown alongside.
     """
 
     service_id: UUID
@@ -97,11 +84,6 @@ class OfferedServiceResponse(BaseModel):
 
 
 class MasterCardResponse(MasterResponse):
-    """A profile together with everything that master offers.
-
-    One response rather than two requests: this is what a visitor opens when
-    they pick a master, and the gateway aggregates it further with the free
-    slots from `booking` (T6.4).
-    """
+    """A profile together with everything that master offers."""
 
     services: list[OfferedServiceResponse]

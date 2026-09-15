@@ -1,8 +1,4 @@
-"""The versioned API of the catalog service.
-
-The prefix lives here so every endpoint inherits the same path
-(docs/CODING_STANDARDS.md section 9).
-"""
+"""The versioned API of the catalog service."""
 
 from __future__ import annotations
 

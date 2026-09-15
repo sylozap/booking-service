@@ -1,22 +1,8 @@
 """Failures the catalog can report.
 
-Each one carries the domain ``code`` from the catalogue in
-``docs/04-api-contracts.md``: the router translates nothing, it lets the
-handler of the chassis turn the exception into ``problem+json``.
-
-This is the one module of the domain that imports the chassis, for the reason
-given in the same place in ``auth``: section 2.2 of docs/CODING_STANDARDS.md
-keeps the domain free of ``barber_common`` and section 6 requires domain errors
-to derive from :class:`DomainError`; the second is the more specific rule, and
-the import is limited to the error base so :mod:`pricing` next to it stays
-copyable into an empty project.
-
-**Not found and forbidden are told apart deliberately.** A caller who may not
-touch a salon gets ``403`` whether the reason is their role or the salon being
-someone else's, because two different answers would let a salon administrator
-enumerate the salons of the platform by watching which ones answer differently
-(docs/04-api-contracts.md). A missing entity answers ``404`` only once the
-caller has been found entitled to see it.
+Each error carries its domain ``code``, and the chassis handler turns it into
+``problem+json``. A caller who may not touch a salon gets ``403`` whatever the
+reason; ``404`` is answered only to a caller entitled to see the entity.
 """
 
 from __future__ import annotations
@@ -63,18 +49,7 @@ class ServiceNotFound(DomainError):
 
 
 class MasterProfileExists(DomainError):
-    """This account already has a profile in this salon.
-
-    ``409`` and not ``422``: both the account and the salon are fine, and so is
-    the request -- what conflicts is the state that already exists. The caller
-    almost certainly wants to edit the profile they already have.
-
-    Not answered silently with the existing profile either, the way a repeated
-    role grant is (docs/04-api-contracts.md). A grant carries nothing but
-    itself, so re-granting is the same state; a profile carries a name, a bio
-    and a photo, and quietly returning the old one would look like a rename
-    that did not take.
-    """
+    """This account already has a profile in this salon."""
 
     code = "master_profile_exists"
     http_status = 409
@@ -82,12 +57,7 @@ class MasterProfileExists(DomainError):
 
 
 class MasterServiceNotFound(DomainError):
-    """This master does not offer this service.
-
-    Raised by the internal endpoint of T2.6, where the absence of the link is
-    the answer ``booking`` needs in order to refuse the booking with
-    ``service_not_offered``.
-    """
+    """This master does not offer this service."""
 
     code = "not_found"
     http_status = 404

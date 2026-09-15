@@ -1,23 +1,7 @@
 """Creating, changing, listing and archiving the services of a salon.
 
-Named ``catalog_services`` rather than ``services``: inside the scenario
-package that would read as ``services/services.py``, and the platform already
-uses "service" for two different things. The domain word wins in the API and in
-the tables; the module name spells out which one is meant
-(docs/CODING_STANDARDS.md section 3).
-
-**A service is never deleted.** Bookings snapshot its name and price at the
-moment they are made, but they still carry ``service_id``, and a row that
-disappears turns every past booking into a dangling identifier. Withdrawing an
-offering is archiving it: it leaves the price list and stays reachable by its
-own identifier. There is no delete endpoint at all, so the router answers
-``405`` -- the absence is the guarantee, not a check that could be forgotten.
-
-**Changing a price does not change what anyone has already been charged.** The
-override a master set is a separate column and is untouched here, and a booking
-that already exists carries its own snapshot in ``booking``. Editing the price
-list is therefore always safe, which is what makes archiving the only operation
-that needs care.
+Named ``catalog_services`` to avoid confusion with platform services. A service
+is never deleted, only archived. Price changes do not affect existing bookings.
 """
 
 from __future__ import annotations
@@ -72,10 +56,7 @@ _logger = get_logger(__name__)
 def service_snapshot(service: Service) -> ServiceCreated:
     """The whole of a service, as ``service.created`` reports it.
 
-    ``ServiceUpdated`` has the same shape deliberately, so a consumer treating
-    the two alike is correct rather than lucky; this builds the created form
-    and the update scenario converts it. One assembly point, because a field
-    added to the payload has to reach both.
+    ``ServiceUpdated`` has the same shape and is built from this.
     """
     return ServiceCreated(
         service_id=service.id,
@@ -120,13 +101,7 @@ class CreateService:
         salon_id: SalonId,
         body: ServiceCreateRequest,
     ) -> ServiceResponse:
-        """Create the service.
-
-        No uniqueness on the name: a salon may reasonably offer "Haircut" for
-        adults and "Haircut" for children and tell them apart by description,
-        and a constraint here would be the service refusing a decision that is
-        the salon's to make.
-        """
+        """Create the service. Names are not required to be unique."""
         async with transaction(self._session):
             salon = await self._salons.get(salon_id)
             if salon is None:
@@ -177,13 +152,8 @@ class UpdateService:
     ) -> ServiceResponse:
         """Apply the fields the caller actually sent.
 
-        An archived service can still be edited -- correcting the name of
-        something withdrawn last year is exactly the case the archive exists
-        for -- and archiving itself is not one of the fields.
-
-        **A request that changes nothing publishes nothing.** A form saved
-        without an edit sends the whole body back, and turning every such press
-        into an event would have every consumer doing the work of handling one.
+        Archived services can be edited too. A request that changes nothing
+        publishes nothing.
         """
         async with transaction(self._session):
             service = await self._services.get(service_id)
@@ -236,14 +206,7 @@ class ArchiveService:
     async def execute(self, *, caller: Principal, service_id: ServiceId) -> None:
         """Mark the service archived. Repeating this changes nothing.
 
-        Idempotent because the caller cannot always know whether the previous
-        attempt landed, and because the requested state -- withdrawn -- is
-        exactly the state that already holds. Answering ``409`` on the second
-        call would make a retry look like a failure.
-
-        Existing links from masters are left alone. Unarchiving would otherwise
-        leave a salon rebuilding every master's price overrides by hand, and
-        the archived service is invisible to every read that matters anyway.
+        Links from masters are kept.
         """
         async with transaction(self._session):
             service = await self._services.get(service_id)

@@ -46,22 +46,17 @@ def create_application(settings: CatalogSettings | None = None) -> FastAPI:
         )
         relay = OutboxRelay(session_factory=database.session_factory, producer=producer)
 
-        # Every service checks the tokens it receives itself, against the
-        # public keys of auth rather than against a header the gateway set: a
-        # request reaching this pod directly is refused by this pod (ADR-0010).
+        # Tokens are verified in this service against the public keys of auth.
         jwks, verifier = jwks_verifier(resolved)
 
-        # Deliberately absent from the readiness probe. The cache decides
-        # nothing (ADR-0012) and a read falls through to the database without
-        # it, so failing readiness over Redis would take healthy pods out of
-        # the load balancer for a dependency the service does not need -- the
-        # outage amplifier the probes exist to avoid.
+        # Not part of the readiness probe: reads fall through to the database
+        # when Redis is unavailable.
         app.state.cache = _build_cache(resolved)
 
         async with AsyncExitStack() as stack:
-            # The producer is deliberately not started here. The relay connects
-            # on its first pass, so a broker that is down delays the events
-            # instead of stopping the service (docs/08-consistency.md).
+            # The producer is not started here: the relay connects on its first
+            # pass, so a broker that is down delays events instead of stopping
+            # the service.
             stack.push_async_callback(producer.stop)
             await stack.enter_async_context(relay.run_in_background())
             # The keys are fetched lazily and refreshed on a timer, so auth

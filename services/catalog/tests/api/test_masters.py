@@ -152,7 +152,7 @@ async def test_creating_a_master_queues_master_created(
     make_salon: SalonFactory,
     session: AsyncSession,
 ) -> None:
-    """booking builds master_settings from this event (docs/03-services.md)."""
+    """booking builds master_settings from this event."""
     salon = await make_salon(timezone="Asia/Yekaterinburg")
     headers = authorize(roles=(("super_admin", None),))
 

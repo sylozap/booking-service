@@ -22,24 +22,12 @@ __all__ = ["MasterService"]
 class MasterService(Base):
     """The link between one master and one service of their salon.
 
-    Both overrides are optional and independent: a master may charge more for
-    the same forty-five minutes, or need an hour at the salon's price, or
-    differ in both, or in neither. The final figures are
-    ``COALESCE(override, base)``, computed in
-    :mod:`barber_catalog.domain.pricing` and nowhere else -- the master card of
-    T2.3 and the internal endpoint of T2.6 are two callers of the same rule.
+    Price and duration overrides are optional and independent; final figures
+    are computed in :mod:`barber_catalog.domain.pricing`.
 
-    **Unlinking is a flag, not a delete.** ``DELETE`` on the endpoint of T2.5
-    sets ``is_active`` to false. The row is what carries the overrides, and
-    dropping it would mean a master who stops offering a service for a month
-    has to have their prices entered again; it also makes the endpoint safe to
-    repeat, which a delete of an absent row is not. Every read -- the card, the
-    internal endpoint -- filters on the flag, so an inactive link is invisible
-    exactly like a missing one.
-
-    The foreign key to ``services`` deliberately has no cascade: a service is
-    never deleted (see :class:`~barber_catalog.models.service.Service`), and a
-    cascade here would be a promise about something that must not happen.
+    Unlinking sets ``is_active`` to false instead of deleting the row, so the
+    overrides are kept. Reads treat an inactive link as missing. The foreign key
+    to ``services`` has no cascade, since services are never deleted.
     """
 
     __tablename__ = "master_services"

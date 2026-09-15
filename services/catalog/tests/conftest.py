@@ -1,20 +1,9 @@
 """Fixtures of the catalog suite.
 
-The database is created once per session and brought up by the real
-migrations -- the same scripts the migration Job runs. Nothing here builds a
-schema from the models: a schema that never went through Alembic leaves the
-migrations untested until the first deployment.
-
-Isolation is a rollback. Every test gets sessions bound to one connection with
-an open transaction, and whatever it writes disappears when it ends, so two
-tests writing to ``salons`` never see each other.
-
-**Tokens are real and really verified.** ``catalog`` does not issue tokens --
-that is what ``auth`` is for -- so the suite signs its own with a throwaway RSA
-key and points the production verifier at the matching public half. Everything
-between the ``Authorization`` header and the endpoint is the code that runs in
-production; a test that handed a router a hand-built principal would stop
-testing whether the router checks anything at all.
+The database is created once per session by the real migrations. Each test
+runs on one connection inside a transaction that is rolled back at the end.
+Tokens are signed with a throwaway RSA key and checked by the production
+verifier.
 """
 
 from __future__ import annotations
@@ -149,12 +138,8 @@ def app(
 ) -> Iterator[FastAPI]:
     """The real application, wired to the rolled back database of the test.
 
-    The lifespan does not run here -- there is no broker, no schema check and
-    no ``auth`` to fetch keys from -- so the two things it would set up are
-    done directly: the session dependency is pointed at the isolated factory,
-    and the verifier is given the public half of the suite's key instead of a
-    JWKS client. Everything else is production code: the routers, the
-    middleware, the error handlers and the scenarios behind them.
+    The lifespan does not run in tests, so the session dependency and the token
+    verifier are wired here directly.
     """
     application = create_application(settings)
 
@@ -241,12 +226,7 @@ def mint(
     scopes: tuple[str, ...] = (),
     ttl_minutes: int = 15,
 ) -> str:
-    """Sign one token the way ``auth`` would.
-
-    The shape is the contract of docs/04-api-contracts.md, not an invention of
-    the tests: ``kid`` in the JOSE header so the consumer picks a key before
-    verifying anything, ``typ`` telling a user token from a service one.
-    """
+    """Sign one token the way ``auth`` would, with ``kid`` and ``typ``."""
     now = datetime.now(UTC)
     claims: dict[str, object] = {
         "sub": subject,

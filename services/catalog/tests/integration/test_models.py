@@ -1,8 +1,4 @@
-"""The schema of T2.1 against a real PostgreSQL brought up by the migrations.
-
-These are the constraints the service leans on later. A test that only checked
-the ORM classes would pass against a database that has none of them.
-"""
+"""Database constraints of the catalog schema, on a real PostgreSQL."""
 
 from __future__ import annotations
 
@@ -80,12 +76,7 @@ async def test_one_account_may_be_a_master_in_two_salons(
 
 
 def test_an_unknown_time_zone_is_refused_by_the_model() -> None:
-    """The backstop of T2.1: no write path reaches the database with a bad zone.
-
-    PostgreSQL cannot check this -- no constraint knows the IANA database -- so
-    the model is the last place the rule can live, and it fires while the
-    object is being built rather than at the flush.
-    """
+    """The model refuses an unknown time zone when the object is built."""
     with pytest.raises(ValueError, match="not a known IANA time zone"):
         Salon(
             name="Nowhere",
@@ -97,12 +88,7 @@ def test_an_unknown_time_zone_is_refused_by_the_model() -> None:
 
 
 def test_an_offset_is_not_a_time_zone() -> None:
-    """A salon keeps a zone name, never ``+03:00``.
-
-    An offset is correct for half the year, and a weekly schedule stored
-    against one moves by an hour on the day the country changes its clocks
-    (docs/02-domain-rules.md).
-    """
+    """A salon keeps a zone name, never ``+03:00``."""
     with pytest.raises(ValueError, match="not a known IANA time zone"):
         Salon(
             name="Offset",
@@ -133,11 +119,7 @@ async def test_a_salon_cannot_have_a_zero_slot_step(
 
 
 async def test_a_salon_gets_the_documented_policy_defaults(session: AsyncSession) -> None:
-    """docs/02-domain-rules.md: 15, 120, 60 and 240.
-
-    The defaults live in the database, so a salon created by a seed script or
-    by hand gets the same policies as one created through the API.
-    """
+    """Default policies set by the database: 15, 120, 60 and 240."""
     salon = Salon(
         name="Defaults",
         address="Default 1",

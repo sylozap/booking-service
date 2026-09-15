@@ -1,12 +1,6 @@
-"""Salons: the shop window, and the policies every booking obeys.
+"""Salons and the booking policies they are run by.
 
-**Reading is open to anonymous callers and writing is not.** Section 9 of
-docs/CODING_STANDARDS.md requires a role check on every endpoint, and the two
-`GET`s below deliberately have none: the catalog is what a visitor sees before
-they have an account, and T6.2 lists it in the anonymous allowlist of the
-gateway. The rule the standard is protecting -- that no endpoint is left open
-by accident -- is met by saying so here and by the tests that assert both
-halves: an anonymous read succeeds, and an anonymous write does not.
+Reading is open to anonymous callers; writing requires a role.
 """
 
 from __future__ import annotations
@@ -56,13 +50,11 @@ async def create_salon(
     """Create a salon, with the four booking policies it will be run by.
 
     The policies -- `slot_step_min`, `booking_min_lead_min`,
-    `booking_horizon_days`, `cancel_deadline_min` -- are stored here and
-    applied by `booking`. Omitting them takes the defaults of
-    [docs/02-domain-rules.md](docs/02-domain-rules.md).
+    `booking_horizon_days`, `cancel_deadline_min` -- are applied by `booking`
+    and take defaults when omitted.
 
     `timezone` is an IANA identifier such as `Europe/Moscow`, never a UTC
-    offset: an offset is correct for half the year, and a weekly schedule
-    stored against one moves by an hour when the country changes its clocks.
+    offset.
     """
     return await scenario.execute(caller=caller, body=body)
 
@@ -78,17 +70,10 @@ async def list_salons(
 ) -> Page[SalonResponse]:
     """The salons on display, alphabetically, one page at a time.
 
-    **Open to anonymous callers**: this is the shop window, and a visitor sees
-    it before they have an account.
-
-    Paging is by cursor and never by offset. `next_cursor` is opaque -- it
-    encodes the sort key of the last item on the page, and the next request
-    resumes after that row rather than counting rows before it. A salon added
-    or removed between two page requests therefore cannot make an existing one
-    be skipped or shown twice, which is exactly what an offset does. A `null`
+    Open to anonymous callers. Paging is by an opaque cursor; a `null`
     `next_cursor` means this was the last page.
 
-    Closed salons are not listed. One remains readable by its own identifier.
+    Closed salons are not listed, but remain readable by identifier.
     """
     return await scenario.execute(request=pagination, city=city)
 
@@ -124,8 +109,7 @@ async def update_salon(
     """Change a salon. Only the fields present in the body are touched.
 
     A `super_admin` may change any salon; a `salon_admin` only the salon their
-    grant names. Both refusals answer `403` with the same body: separating them
-    would let an administrator of one salon find out which other salons exist.
+    grant names. Both refusals answer `403` with the same body.
 
     A field sent as `null` is cleared; a field left out is left alone.
     """

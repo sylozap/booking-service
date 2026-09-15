@@ -13,10 +13,8 @@ from barber_common.pagination import PageRequest, cursor_uuid
 
 __all__ = ["SALON_CURSOR_ARITY", "SalonRepository", "salon_cursor"]
 
-# The listing is ordered by ``(name, id)``: alphabetical, because that is how a
-# shop window is read, and ending in the primary key, because a keyset cursor
-# needs the ordering to be unique or a page boundary falling between two salons
-# of the same name would repeat one of them forever.
+# The listing is ordered by ``(name, id)``: alphabetical, and unique for the
+# keyset cursor.
 SALON_CURSOR_ARITY = 2
 
 
@@ -42,29 +40,14 @@ class SalonRepository:
         return salon
 
     async def get(self, salon_id: SalonId) -> Salon | None:
-        """One salon by identifier, active or not.
-
-        Deliberately unfiltered. An inactive salon disappears from the listing
-        but stays reachable by its own identifier, exactly like an archived
-        service: a booking made while it was open still names it, and an
-        administrator has to be able to reach the salon they just closed.
-        """
+        """One salon by identifier, active or not."""
         return await self._session.get(Salon, salon_id)
 
     async def page(self, *, request: PageRequest, city: str | None = None) -> Sequence[Salon]:
-        """One window of the shop window, ordered by ``(name, id)``.
+        """One window of the active salons, ordered by ``(name, id)``.
 
-        **There is no access scope in this query, and that is deliberate.**
-        Section 8 of docs/CODING_STANDARDS.md requires every listing to be
-        filtered by the role of the caller in the SQL itself, because filtering
-        afterwards in Python returns short pages. The catalog listing has no
-        such filter to apply: it is the shop window, every salon in it is
-        visible to everyone including callers with no token at all, and the
-        gateway serves it to anonymous traffic (T6.2). What is filtered instead
-        is activity -- a closed salon is not on display.
-
-        Returns one row more than the caller asked for; the scenario turns that
-        row into ``next_cursor`` and never returns it.
+        Visible to everyone, so there is no access scope. Returns one row more
+        than requested; the scenario turns it into ``next_cursor``.
         """
         statement = select(Salon).where(Salon.is_active.is_(True))
         if city is not None:
@@ -80,10 +63,7 @@ class SalonRepository:
 def _resume(statement: Select[tuple[Salon]], request: PageRequest) -> Select[tuple[Salon]]:
     """Continue after the row the cursor names.
 
-    A row value comparison -- ``(name, id) > (:name, :id)`` -- and not
-    ``name > :name AND id > :id``, which is a different predicate and drops
-    every row whose name matches the cursor. PostgreSQL implements the first
-    directly and can walk the matching index with it.
+    Uses the row value comparison ``(name, id) > (:name, :id)``.
     """
     key = request.key(arity=SALON_CURSOR_ARITY)
     if key is None:

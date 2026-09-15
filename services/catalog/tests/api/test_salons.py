@@ -60,7 +60,7 @@ async def test_a_new_salon_gets_the_documented_policy_defaults(
     app: FastAPI,
     authorize: AuthorizationFactory,
 ) -> None:
-    """docs/02-domain-rules.md: 15, 120, 60 and 240."""
+    """Default policies: 15, 120, 60 and 240."""
     headers = authorize(roles=(("super_admin", None),))
 
     async with app_client(app) as client:
@@ -288,7 +288,7 @@ async def test_the_listing_is_open_to_anonymous_callers(
     app: FastAPI,
     make_salon: SalonFactory,
 ) -> None:
-    """The shop window: a visitor sees it before they have an account (T6.2)."""
+    """The salon listing is open to anonymous visitors."""
     await make_salon(name="Open To All")
 
     async with app_client(app) as client:

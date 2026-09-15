@@ -1,19 +1,8 @@
 """What a master actually charges, and how long they actually take.
 
-The one rule the catalog has. A salon publishes a base price and a base
-duration for each service; a master may override either, both, or neither, and
-the figure that counts is ``COALESCE(override, base)``.
-
-It lives here, as a value object over plain numbers, because it has two callers
-that must not disagree: the master card of T2.3, which a visitor reads, and the
-internal endpoint of T2.6, from which ``booking`` takes the duration it lays
-out on the grid and the price it writes into the booking. A rule computed
-separately in two scenarios is a rule that eventually shows one number and
-charges another.
-
-No imports beyond the standard library, on purpose: this module is the whole
-domain of the service and has to stay copyable into an empty project together
-with its tests (docs/CODING_STANDARDS.md section 2.2).
+A salon sets a base price and duration for each service; a master may override
+either. The final figure is ``COALESCE(override, base)``, computed only here
+and used by both the master card and the internal endpoint.
 """
 
 from __future__ import annotations
@@ -28,13 +17,7 @@ __all__ = ["Offering"]
 class Offering:
     """One service as one master offers it.
 
-    Validated in the constructor rather than by whoever builds it: a value
-    object that can exist in an impossible state pushes the check into every
-    call site, and one of them will forget
-    (docs/CODING_STANDARDS.md section 6).
-
-    Money is ``Decimal``. A price expressed as a float is a price that is
-    occasionally off by a hundredth, and the difference lands on a receipt.
+    Validated in the constructor. Money is ``Decimal``.
     """
 
     base_price: Decimal
@@ -66,8 +49,6 @@ class Offering:
     def duration_min(self) -> int:
         """How long the master is occupied, before the buffer.
 
-        The buffer after a booking belongs to ``booking``: it is a property of
-        the master's working day rather than of the service, and it does not
-        have to fit inside the shift (docs/02-domain-rules.md).
+        The buffer after a booking is configured in ``booking``.
         """
         return self.base_duration_min if self.duration_override is None else self.duration_override

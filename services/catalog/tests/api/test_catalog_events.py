@@ -1,14 +1,8 @@
-"""Every change to the catalog, and the one event it puts in the outbox.
+"""Events written to the outbox by every change to the catalog.
 
-Three properties are asserted for each: that there is exactly one event, that
-its partitioning key is the aggregate it is about, and that a change refused or
-rolled back leaves none. The last is the whole point of the outbox -- the row
-and the announcement of it are one transaction, so neither can survive alone
-(ADR-0004).
-
-What is deliberately not tested here is the relay. Whether an outbox row
-reaches Kafka is settled in the chassis tests; what belongs to the catalog is
-whether the right row is written at all.
+For each change: exactly one event, keyed by its aggregate, and none when the
+change is refused or rolled back. Publishing to Kafka is covered by the chassis
+tests.
 """
 
 from __future__ import annotations
@@ -390,11 +384,7 @@ async def test_offering_a_service_publishes_master_updated(
     make_service: ServiceFactory,
     session: AsyncSession,
 ) -> None:
-    """What a master offers is, from the outside, part of that master.
-
-    Without this, a consumer caching the internal answer (T3.6) would keep
-    serving a price that has been overridden since.
-    """
+    """Changing what a master offers publishes ``master.updated``."""
     salon = await make_salon()
     master = await make_master(salon_id=salon.id)
     service = await make_service(salon_id=salon.id)
@@ -484,7 +474,7 @@ async def test_a_rolled_back_change_leaves_no_event(
     make_service: ServiceFactory,
     session: AsyncSession,
 ) -> None:
-    """The row and the announcement of it are one transaction (ADR-0004).
+    """A rolled back change leaves no event.
 
     Linking a service of another salon fails after the link row has been
     staged, so the rollback has to take the event with it.

@@ -38,26 +38,13 @@ class MasterRepository:
         return master
 
     async def get(self, master_id: MasterId) -> Master | None:
-        """One profile by identifier, active or not.
-
-        A deactivated master stays readable: their bookings still name them,
-        and the internal endpoint of T2.6 reports the state as a flag rather
-        than as an error, so that ``booking`` can answer ``master_inactive``
-        instead of ``not found``.
-        """
+        """One profile by identifier, active or not."""
         return await self._session.get(Master, master_id)
 
     async def get_with_offerings(self, master_id: MasterId) -> Master | None:
-        """One profile together with the services it offers.
+        """One profile together with the services it actively offers.
 
-        ``selectinload`` and not a lazy load: the relationship is declared
-        ``lazy="raise"``, so a caller that forgets this gets an exception
-        rather than an N+1 that only shows up under load. Two statements, one
-        round trip each, and no join fan-out over the profile columns.
-
-        Only active links are loaded. Unlinking is a flag (T2.5), and a card
-        showing services the master no longer offers would be wrong in exactly
-        the way the flag exists to prevent.
+        The links and their services are loaded with ``selectinload``.
         """
         statement = (
             select(Master)
@@ -80,14 +67,8 @@ class MasterRepository:
     ) -> Sequence[Master]:
         """One window of the masters of a salon, ordered by name.
 
-        Scoped to the salon by the caller's path rather than by their role:
-        like the salon listing, this is the shop window and every profile in it
-        is visible to everyone (see
-        :meth:`~barber_catalog.repositories.salons.SalonRepository.page`).
-
-        ``is_active`` left as ``None`` returns both, which is what an
-        administrator reviewing their staff wants; the public card of a salon
-        asks for the active ones.
+        Visible to everyone. ``is_active`` left as ``None`` returns both active
+        and inactive masters.
         """
         statement = select(Master).where(Master.salon_id == salon_id)
         if is_active is not None:

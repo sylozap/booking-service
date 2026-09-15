@@ -1,15 +1,7 @@
-"""The answer ``booking`` reads before it lays out a day.
+"""The details ``booking`` reads about one master offering one service.
 
-One scenario, one query path, one response: the contract in
-:mod:`barber_common.contracts.catalog`. Everything it reports comes from this
-database, so the answer is internally consistent -- three separate calls could
-observe a price changing between them.
-
-The resolution of the final price and duration goes through
-:class:`~barber_catalog.domain.pricing.Offering`, the same object the master
-card uses. That is the point of having it: the figure a client is shown on the
-card and the figure ``booking`` writes into the booking come from one
-implementation, so they cannot drift.
+Returns the contract in :mod:`barber_common.contracts.catalog`. Final price and
+duration are resolved through :class:`~barber_catalog.domain.pricing.Offering`.
 """
 
 from __future__ import annotations
@@ -47,24 +39,9 @@ class ReadMasterServiceDetails:
     ) -> MasterServiceDetails:
         """Read everything at one consistent moment.
 
-        The cache is asked first: this is the hot path of the platform, and
-        ``booking`` reads it before every availability calculation. A miss --
-        or a cache that is unreachable -- falls through to the database and
-        answers identically.
-
-        The three database reads share a transaction so that a price change
-        landing between them cannot produce an answer where the duration comes
-        from before it and the price from after. The cache is read before that
-        transaction opens and written after it closes: a network call inside an
-        open transaction holds a pooled connection for its duration
-        (docs/CODING_STANDARDS.md section 8).
-
-        **A deactivated master is reported, not refused.** ``master_active``
-        false is a complete answer, and it is what lets ``booking`` say
-        ``master_inactive`` rather than treat a policy decision as a failed
-        upstream call. A missing *link* is a ``404``, because then there is
-        nothing to describe -- and that is exactly the signal ``booking`` turns
-        into ``service_not_offered``.
+        The cache is read first; on a miss the three database reads share one
+        transaction, and the result is cached after it closes. A deactivated
+        master is reported through ``master_active``; a missing link raises.
         """
         key = await self._cache.offering_key(master_id, service_id)
         cached = await self._cache.read(key, MasterServiceDetails)
@@ -82,8 +59,8 @@ class ReadMasterServiceDetails:
             if link is None:
                 raise MasterServiceNotFound("This master does not offer this service")
 
-            # Guaranteed by the link: a service may only be taken up by a
-            # master of its own salon (T2.5), so one salon covers both.
+            # A master may only offer services of their own salon, so one salon
+            # covers both.
             salon = await self._salons.get(SalonId(master.salon_id))
             if salon is None:  # pragma: no cover - a master cannot outlive its salon
                 raise MasterNotFound("No such master")

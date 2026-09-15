@@ -1,13 +1,7 @@
 """Creating, changing and listing salons.
 
-The salon is the root of everything else in the catalog: a master belongs to
-one, a service belongs to one, and the four booking policies live on it. That
-is why creating one is reserved for ``super_admin`` -- a salon administrator
-who could create salons could create the salon they administer -- while
-changing one is open to the administrator of that salon.
-
-Reading is open to everybody, including callers with no token: the catalog is
-the shop window, and the gateway serves it to anonymous traffic (T6.2).
+Only a ``super_admin`` creates salons; the administrator of a salon may change
+it. Reading is open to everyone, including anonymous callers.
 """
 
 from __future__ import annotations
@@ -42,12 +36,7 @@ _logger = get_logger(__name__)
 
 
 def salon_response(salon: Salon) -> SalonResponse:
-    """Map a row to the response body.
-
-    Explicit and in one place: the catalog repository hands back ORM objects
-    (docs/CODING_STANDARDS.md section 5), and a router returning one directly
-    would publish the database schema as the API contract.
-    """
+    """Map a row to the response body."""
     return SalonResponse(
         id=salon.id,
         name=salon.name,
@@ -100,10 +89,7 @@ class CreateSalon:
             # a state the commit never reached.
             response = salon_response(salon)
 
-        # After the commit, never inside it: Redis and PostgreSQL cannot be
-        # made atomic with each other, and a network call inside an open
-        # transaction holds a pooled connection for its duration
-        # (docs/CODING_STANDARDS.md section 8).
+        # After the commit, so no network call runs inside the transaction.
         await self._cache.invalidate()
 
         _logger.info("salon created", salon_id=str(salon.id), created_by=caller.subject)
@@ -127,15 +113,9 @@ class UpdateSalon:
     ) -> SalonResponse:
         """Apply the fields the caller actually sent.
 
-        ``exclude_unset`` is what separates "clear the description" from "leave
-        the description alone": both arrive as ``None`` on the parsed body, and
-        only the set of keys present in the request tells them apart.
-
-        The salon is loaded before the scope is checked, because the scope is a
-        question about this salon and the answer is in the row. A caller who
-        may not touch it gets ``403`` whether or not it exists -- ordering it
-        the other way would turn the endpoint into a way of discovering which
-        salon identifiers are real.
+        Only keys present in the request are applied, so ``null`` clears a
+        field. The salon is loaded before the scope check, and a caller without
+        access gets ``403`` whether or not it exists.
         """
         async with transaction(self._session):
             salon = await self._salons.get(salon_id)

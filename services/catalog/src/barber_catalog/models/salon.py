@@ -13,9 +13,7 @@ from barber_common.db.base import Base
 
 __all__ = ["Salon"]
 
-# Defaults of docs/02-domain-rules.md. They live in the database rather than in
-# the application so that a salon created by a seed script or by hand in psql
-# gets the same policies as one created through the API.
+# Default booking policies, set in the database so every write path gets them.
 DEFAULT_SLOT_STEP_MIN = 15
 DEFAULT_BOOKING_MIN_LEAD_MIN = 120
 DEFAULT_BOOKING_HORIZON_DAYS = 60
@@ -25,15 +23,8 @@ DEFAULT_CANCEL_DEADLINE_MIN = 240
 class Salon(Base):
     """One salon, with the four policies that decide when it can be booked.
 
-    The policies are stored here and applied in ``booking``
-    (docs/02-domain-rules.md): the salon owns the rule, the service that holds
-    the bookings enforces it, and the internal endpoint of T2.6 is how the
-    second learns the first.
-
-    ``timezone`` is an IANA identifier -- ``Europe/Moscow`` -- and never an
-    offset. An offset is correct for half the year, and a weekly schedule
-    stored against one silently moves by an hour on the day the country changes
-    its clocks.
+    The policies are stored here and applied by ``booking``. ``timezone`` is an
+    IANA identifier such as ``Europe/Moscow``, never an offset.
     """
 
     __tablename__ = "salons"
@@ -69,26 +60,16 @@ class Salon(Base):
         CheckConstraint("booking_min_lead_min >= 0", name="booking_min_lead_min_not_negative"),
         CheckConstraint("booking_horizon_days > 0", name="booking_horizon_days_positive"),
         CheckConstraint("cancel_deadline_min >= 0", name="cancel_deadline_min_not_negative"),
-        # The listing of T2.2: filtered by city, ordered by the keyset
-        # ``(name, id)``. There is no second index for the unfiltered listing
-        # -- the platform has twenty salons (docs/03-services.md), and sorting
-        # twenty rows is cheaper than maintaining an index over them.
+        # Salons filtered by city, ordered by the keyset ``(name, id)``.
         Index("ix_salons_city_name_id", "city", "name", "id"),
     )
 
     @validates("timezone")
     def _validate_timezone(self, _key: str, value: str) -> str:
-        """Refuse a zone the system cannot resolve.
+        """Refuse a time zone that cannot be resolved.
 
-        Here rather than only in the request schema because this is the one
-        point every write path crosses -- the API, a seed script, a future
-        consumer. PostgreSQL cannot check it: there is no constraint that knows
-        the IANA database.
-
-        A plain ``ValueError``, not a domain error: models may not import the
-        domain or the chassis errors (docs/CODING_STANDARDS.md section 2.2).
-        The request schema runs the same check first and answers ``422``, so a
-        caller never sees this one -- it is the backstop, not the message.
+        A backstop for every write path; the request schema checks the same
+        thing first and answers ``422``.
         """
         try:
             ZoneInfo(value)

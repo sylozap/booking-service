@@ -1,38 +1,11 @@
-"""What the catalog caches, and what makes a cached answer stop counting.
+"""Cached reads of the catalog and their invalidation.
 
-Three reads are cached, and they are the three the platform actually leans on:
-the master card a visitor opens, one service, and the internal answer
-``booking`` reads before every availability calculation. The listings are not
-cached -- each page has its own cursor and its own filter, so each is its own
-key, and a cache of one-visit keys is a cache that only evicts.
+Cached: the master card, one service, and the internal answer for ``booking``.
+Listings are not cached.
 
-**Invalidation is a generation counter, not a set of deletes.** Every key
-carries the generation it was written under, and a write anywhere in the
-catalog increments the counter, which makes every key written under the old one
-unreachable at once. One ``INCR`` invalidates everything, there is nothing to
-enumerate and nothing to scan, and -- the reason this scheme was chosen -- a
-key cannot be forgotten. Deleting exactly the affected keys would be more
-precise and would require every write path to know which reads it touches: an
-edit to one service changes the card of every master offering it and every
-internal answer that mentions it, and the day someone adds a fourth cached read
-without revisiting all eleven write scenarios, the cache starts lying.
-
-**The counter is one for the whole catalog rather than one per salon.** A key
-has to be computable from what the request carries, and
-``GET /api/v1/masters/{id}`` does not carry a salon -- finding it would take
-the database query the cache exists to avoid. The price is that a write in one
-salon invalidates the reads of all of them. With twenty salons
-(docs/03-services.md), writes that are administrative operations, and a
-five-minute expiry underneath, that costs a handful of extra database reads a
-day.
-
-**Invalidation happens after the commit.** Redis and PostgreSQL cannot be made
-atomic with each other, and holding a database connection open across a network
-call to Redis is forbidden outright (docs/CODING_STANDARDS.md section 8). What
-remains is the race every cache-aside scheme has: a reader that queried before
-a write commits can store what it read after the invalidation, and that entry
-stays until it expires. The TTL is the bound on it, which is why it is five
-minutes and not five hours.
+Invalidation uses one generation counter for the whole catalog: every key
+includes the current generation, and each write increments it after the
+commit. Stale entries left by a concurrent read are bounded by the TTL.
 """
 
 from __future__ import annotations
@@ -66,11 +39,7 @@ class CatalogCache:
     async def read[ModelT: BaseModel](self, key: str, model: type[ModelT]) -> ModelT | None:
         """Return a cached document, or nothing.
 
-        The document is validated against the model rather than trusted. A
-        release that changes the shape of a response leaves documents written
-        by the previous one in Redis, and handing one of those to a caller
-        would turn a deployment into a stream of malformed answers. A document
-        that no longer parses is treated as a miss and quietly replaced.
+        A document that no longer matches the model is treated as a miss.
         """
         raw = await self._cache.get(key)
         if raw is None:
@@ -107,14 +76,7 @@ class CatalogCache:
         return f"{await self._prefix()}:offering:{master_id}:{service_id}"
 
     async def _prefix(self) -> str:
-        """The namespace the current generation writes and reads under.
-
-        A second round trip to Redis before the value itself. It buys the
-        property that makes this scheme worth having: invalidation is one
-        command that cannot miss a key. Against the database query it replaces
-        -- a card is three statements with their joins -- two Redis reads are
-        not a cost worth optimising away.
-        """
+        """The key prefix of the current generation."""
         return f"{KEY_PREFIX}:{await self._generation()}"
 
     async def _generation(self) -> int:

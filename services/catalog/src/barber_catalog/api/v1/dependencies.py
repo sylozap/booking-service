@@ -1,14 +1,7 @@
 """Assembling the scenarios a request needs.
 
-A scenario takes its dependencies through the constructor, so it can be built
-in a test without an application behind it. This module is where the ones a
-request has -- its session and the cache of the running service -- are put
-together (docs/CODING_STANDARDS.md section 7).
-
-Every scenario that reads a cached view and every scenario that writes takes
-the cache. The writers take it because invalidation is theirs to trigger: a
-write that does not bump the generation leaves the old answer readable until it
-expires.
+Builds each scenario from the session and the cache of the running service.
+Writers take the cache too, because they invalidate it.
 """
 
 from __future__ import annotations
@@ -73,10 +66,8 @@ SessionDependency = Annotated[AsyncSession, Depends(get_session)]
 def get_catalog_cache(request: Request) -> CatalogCache:
     """The cache of the running service, wrapped in the catalog key scheme.
 
-    Falls back to a disabled cache rather than raising when the lifespan has
-    not run. Unlike the database or the token verifier, a missing cache is a
-    state the service is designed to work in, so the absence of one is not a
-    reason to refuse a request.
+    Falls back to a disabled cache when the lifespan has not run, since the
+    service works without one.
     """
     cache = getattr(request.app.state, "cache", None)
     if not isinstance(cache, Cache):

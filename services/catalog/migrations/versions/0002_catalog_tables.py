@@ -1,23 +1,10 @@
 """catalog tables: salons, masters, services and the master-service link
 
-The whole schema of the catalog database in one revision. It is one logical
-change -- "the catalog owns the shop window" -- and the four tables are
-meaningless apart: a master without a salon, or a link without both sides, is
-not a state the service can be brought to.
+The whole schema of the catalog database in one revision.
 
-Three shapes deserve a word.
-
-``salons`` carries the four booking policies. They are applied in ``booking``
-and stored here, because the salon is what owns the rule
-(docs/02-domain-rules.md). The defaults are in the database rather than only in
-the application so that a salon created by a seed script gets the same policies
-as one created through the API.
-
-``masters.user_id`` names an account in ``auth`` and has no foreign key: no
-constraint of this database may reach into another service (docs/03-services.md).
-
-``master_services`` keeps its own primary key over both sides and no surrogate
-one: the pair is the identity, and neither half is null.
+``salons`` carries the four booking policies with database defaults, applied
+by ``booking``. ``masters.user_id`` names an account in ``auth`` without a
+foreign key. ``master_services`` uses the pair of ids as its primary key.
 
 Revision ID: 0002_catalog_tables
 Revises: 0001_shared_tables
@@ -33,7 +20,7 @@ down_revision: str | None = "0001_shared_tables"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
-# docs/02-domain-rules.md, the table of salon settings.
+# Default booking policies of a salon.
 DEFAULT_SLOT_STEP_MIN = 15
 DEFAULT_BOOKING_MIN_LEAD_MIN = 120
 DEFAULT_BOOKING_HORIZON_DAYS = 60

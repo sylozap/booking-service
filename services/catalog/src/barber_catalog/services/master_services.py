@@ -1,29 +1,9 @@
 """Which services a master offers, and on what terms.
 
-``PUT`` states the whole terms of one link and ``DELETE`` withdraws it. Both
-are idempotent, which is the reason ``PUT`` was chosen over ``POST``: an
-administrator setting a price list for a dozen masters retries, and a create
-that fails the second time would make them check each one by hand.
-
-**A master may only offer services of their own salon.** The check is here
-rather than in the database: a foreign key cannot express "the salon of the
-master equals the salon of the service", and a composite key that could would
-mean carrying ``salon_id`` in the link table just to constrain it. The answer
-is ``422`` -- both entities exist and the caller may see both, so what is wrong
-is the combination.
-
-**Withdrawing is a flag, not a delete.** The row carries the overrides, and
-dropping it would mean a master who stops offering something for a month has to
-have their prices entered again. It also makes ``DELETE`` safe to repeat, which
-a delete of an absent row is not.
-
-**Both publish ``master.updated``, keyed by the master.** The six events of
-T2.9 are named after the master and the service aggregates, and the link is
-neither -- but what a master offers is, from the outside, part of that master,
-and it is exactly what the internal endpoint of T2.6 answers with. Without an
-event here, a consumer caching that answer (T3.6) would keep serving a price
-that has been overridden since. Keying it by the master is what keeps it in
-order with the other events about the same profile.
+``PUT`` sets the whole terms of one link and ``DELETE`` withdraws it; both are
+idempotent. A master may only offer services of their own salon, otherwise the
+answer is ``422``. Withdrawing sets a flag and keeps the overrides. Both
+operations publish ``master.updated``, keyed by the master.
 """
 
 from __future__ import annotations
@@ -110,15 +90,8 @@ class LinkMasterService:
     ) -> MasterServiceResponse:
         """Create or replace the link.
 
-        ``PUT`` states the whole state of the link, so an override left out of
-        the body is an override that is gone -- which is how one is removed.
-        Assigning both fields unconditionally rather than only the ones present
-        is what makes that true.
-
-        Order of the checks: the master decides the salon, the salon decides
-        whether the caller may be here at all, and only then does the service
-        get looked at. Checking the service first would let a caller with no
-        rights anywhere find out which service identifiers are real.
+        An override left out of the body is removed. The caller's access to the
+        salon is checked before the service is looked up.
         """
         async with transaction(self._session):
             master = await self._masters.get(master_id)
@@ -191,15 +164,8 @@ class UnlinkMasterService:
     ) -> None:
         """Withdraw the link, keeping the terms it carried.
 
-        **Existing bookings are untouched.** A booking holds its own snapshot
-        of the service name, price and duration, taken when it was made
-        (docs/05-data-model.md), so what a master offers today has no bearing
-        on what was already agreed.
-
-        A link that is not there, or is already withdrawn, still answers
-        ``204``: the requested state is the state that holds. A missing
-        *master* is still ``404`` -- that is a wrong request rather than a
-        repeated one.
+        Existing bookings are not affected. A missing or already withdrawn link
+        still answers ``204``; a missing master answers ``404``.
         """
         async with transaction(self._session):
             master = await self._masters.get(master_id)
