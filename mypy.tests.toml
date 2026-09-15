@@ -1,10 +1,8 @@
 # The configuration of the per-service test run of "make type".
 #
-# It exists because mypy refuses to see two files with the same module name in
-# one invocation, and every service has a tests/test_smoke.py. The repository
-# wide run therefore leaves services/*/tests out, and this file checks them one
-# service at a time with the same strictness -- minus the relaxations tests are
-# allowed by docs/CODING_STANDARDS.md section 4.
+# mypy refuses two files with the same module name in one run, and every
+# service has a tests/test_smoke.py, so service tests are checked one service at
+# a time with the same strictness, minus the relaxations allowed for tests.
 [tool.mypy]
 python_version = "3.12"
 strict = true

@@ -45,9 +45,9 @@ def create_application(settings: BookingSettings | None = None) -> FastAPI:
         relay = OutboxRelay(session_factory=database.session_factory, producer=producer)
 
         async with AsyncExitStack() as stack:
-            # The producer is deliberately not started here. The relay connects
-            # on its first pass, so a broker that is down delays the events
-            # instead of stopping the service (docs/08-consistency.md).
+            # The producer is not started here: the relay connects on its first
+            # pass, so a broker that is down delays events instead of stopping
+            # the service.
             stack.push_async_callback(producer.stop)
             await stack.enter_async_context(relay.run_in_background())
             yield

@@ -79,11 +79,7 @@ def configure_tracing(
 
 
 def _instrument_redis(provider: TracerProvider) -> None:
-    """Instrument Redis if the client is installed.
-
-    The cache arrives in a later task; until then the package is absent and
-    there is nothing to instrument.
-    """
+    """Instrument Redis if the instrumentation package is installed."""
     try:
         from opentelemetry.instrumentation.redis import RedisInstrumentor
     except ImportError:

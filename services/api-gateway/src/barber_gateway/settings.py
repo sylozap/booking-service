@@ -12,9 +12,6 @@ class GatewaySettings(BaseAppSettings):
 
     service_name: str = "api-gateway"
 
-    # The gateway owns no data (docs/03-services.md): it proxies, and the only
-    # state it touches is the Redis of the rate limiter. Keeping the DSN
-    # mandatory would force an operator to invent a database that never exists.
-    # Narrowing a required field of the chassis to optional is the point here,
-    # which is what the ignore is for: this is the one service without a database.
+    # The gateway owns no database, so the DSN required by the chassis is
+    # narrowed to optional here; hence the ignore.
     database_dsn: SecretPostgresDsn | None = None  # type: ignore[assignment]

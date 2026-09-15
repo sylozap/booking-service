@@ -1,11 +1,7 @@
 -- Four databases and four roles, created once when the volume is empty.
 --
--- The point is the isolation, not the convenience: every service gets a role
--- that can connect to its own database and to no other. A shared superuser
--- would let one service read another one's tables, and the day someone does it
--- the service boundary is gone -- with no error message anywhere to notice it
--- by (ADR-0014). Kubernetes gets the same layout from its own secrets; this
--- file is where the rule is proven locally.
+-- Every service gets a role that can connect to its own database and to no
+-- other.
 
 CREATE ROLE auth WITH LOGIN PASSWORD 'auth';
 CREATE ROLE catalog WITH LOGIN PASSWORD 'catalog';

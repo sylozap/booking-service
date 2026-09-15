@@ -1,12 +1,8 @@
 # The pipeline that decides whether a branch may be merged.
 #
-# It runs exactly what "make lint type test" runs locally: a check that exists
-# only in CI is a check developers learn to discover from a red pipeline, and
-# one that exists only locally is a check that stops running.
-#
-# Images are built for the services a pull request actually touched, and pushed
-# only from the default branch, tagged by commit SHA -- a tag that says which
-# code is running and makes a rollback an exact operation (docs/10).
+# It runs exactly what "make lint type test" runs locally. Images are built for
+# the services a change touched and pushed only from the default branch, tagged
+# by commit SHA.
 name: ci
 
 on:

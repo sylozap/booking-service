@@ -20,8 +20,8 @@ x-service-environment: &service-environment
   REDIS_DSN: redis://redis:6379/0
   KAFKA_BOOTSTRAP_SERVERS: kafka:29092
   OTLP_ENABLED: "false"
-  # Every service verifies the tokens it receives itself (ADR-0010): the
-  # issuer it expects, and where to fetch the public keys. auth ignores
+  # Every service verifies the tokens it receives itself: the issuer it
+  # expects, and where to fetch the public keys. auth ignores
   # JWKS_URL -- it holds the keys already.
   JWT_ISSUER: https://barber.local/auth
   JWKS_URL: http://auth:8001
@@ -71,8 +71,7 @@ services:
     ports:
       - "9092:9092"
     environment:
-      # KRaft: one node that is both broker and controller. No ZooKeeper here
-      # and none in the cluster either (docs/10-infrastructure.md).
+      # KRaft: one node that is both broker and controller, no ZooKeeper.
       CLUSTER_ID: barber-local-cluster-1
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller

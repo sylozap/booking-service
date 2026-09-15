@@ -6,10 +6,6 @@
 **Стек:** Python 3.12, FastAPI, SQLAlchemy 2.x (async), PostgreSQL, Redis, Kafka,
 Kubernetes, OpenTelemetry, Prometheus, Grafana, Tempo, Loki.
 
-Архитектура и решения — в [docs/README.md](docs/README.md).
-Рабочий план — [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md).
-Соглашения по коду — [docs/CODING_STANDARDS.md](docs/CODING_STANDARDS.md).
-
 ## Требования
 
 - [uv](https://docs.astral.sh/uv/) 0.12+ — управление зависимостями и окружением
@@ -57,7 +53,7 @@ notification `8004`. Исходники смонтированы в контей
 
 Миграции применяются одноразовыми контейнерами `<service>-migrate` при подъёме
 стенда; вручную — `make migrate`. Профиль наблюдаемости (`make up-obs`) пока
-пустой и наполняется на Э7.
+пустой.
 
 ## Структура
 
@@ -65,8 +61,6 @@ notification `8004`. Исходники смонтированы в контей
 libs/common/          # шасси barber_common: конфиг, логи, ошибки, БД, Kafka, health
 services/             # api-gateway, auth, catalog, booking, notification
 deploy/compose/       # локальная инфраструктура
-deploy/helm/          # общий chart и values на каждый сервис
-docs/                 # архитектура, ADR, план реализации
 ```
 
 ## Конфигурация
@@ -83,11 +77,3 @@ cp .env.example .env
 ```
 
 Файл `.env` в git не попадает.
-
-## Состояние
-
-Этап Э0 «Фундамент» завершён, задачи T0.1–T0.18: workspace, конфигурация,
-логирование, ошибки RFC 9457, слой базы данных, health-check, метрики,
-трассировка, фабрика приложения, HTTP-клиент, продюсер и конверт события,
-outbox с relay, консьюмер с дедупликацией и DLQ, шаблон Alembic и общие
-миграции, тестовая инфраструктура, пять сервисов, docker-compose и CI.

@@ -63,35 +63,35 @@ $(SIGNING_KEY):
 	$(UV) run python scripts/gen_keys.py --out $(SIGNING_KEY) --mode 644
 
 up: keys ## Start the local environment
-	@test -f $(COMPOSE_FILE) || { echo "$(COMPOSE_FILE) appears in T0.17"; exit 1; }
+	@test -f $(COMPOSE_FILE) || { echo "$(COMPOSE_FILE) not found"; exit 1; }
 	$(COMPOSE) up -d --build
 
 up-obs: keys ## Start the local environment together with the observability profile
-	@test -f $(COMPOSE_FILE) || { echo "$(COMPOSE_FILE) appears in T0.17"; exit 1; }
+	@test -f $(COMPOSE_FILE) || { echo "$(COMPOSE_FILE) not found"; exit 1; }
 	$(COMPOSE_WITH_OBS) up -d --build
 
 down: ## Stop the local environment
-	@test -f $(COMPOSE_FILE) || { echo "$(COMPOSE_FILE) appears in T0.17"; exit 1; }
+	@test -f $(COMPOSE_FILE) || { echo "$(COMPOSE_FILE) not found"; exit 1; }
 	$(COMPOSE) down -v
 
 logs: ## Follow the local environment logs
-	@test -f $(COMPOSE_FILE) || { echo "$(COMPOSE_FILE) appears in T0.17"; exit 1; }
+	@test -f $(COMPOSE_FILE) || { echo "$(COMPOSE_FILE) not found"; exit 1; }
 	$(COMPOSE) logs -f
 
 migrate: ## Apply database migrations of every service
-	@test -x scripts/migrate.sh || { echo "scripts/migrate.sh appears in T0.14"; exit 1; }
+	@test -x scripts/migrate.sh || { echo "scripts/migrate.sh not found"; exit 1; }
 	./scripts/migrate.sh
 
 seed: ## Load demo data into the local environment
-	@test -x scripts/seed.sh || { echo "scripts/seed.sh appears in T8.1"; exit 1; }
+	@test -x scripts/seed.sh || { echo "scripts/seed.sh not found"; exit 1; }
 	./scripts/seed.sh
 
 kind-up: ## Create the kind cluster and install the Helm releases
-	@test -x scripts/kind-up.sh || { echo "scripts/kind-up.sh appears in T6.1"; exit 1; }
+	@test -x scripts/kind-up.sh || { echo "scripts/kind-up.sh not found"; exit 1; }
 	./scripts/kind-up.sh
 
 kind-down: ## Delete the kind cluster
-	@test -x scripts/kind-down.sh || { echo "scripts/kind-down.sh appears in T6.1"; exit 1; }
+	@test -x scripts/kind-down.sh || { echo "scripts/kind-down.sh not found"; exit 1; }
 	./scripts/kind-down.sh
 
 clean: ## Remove build and test artefacts

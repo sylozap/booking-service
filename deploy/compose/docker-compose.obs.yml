@@ -1,8 +1,4 @@
-# The observability profile, deliberately empty until stage Э7.
-#
-# Prometheus, Grafana, Tempo, Loki and Alloy are added by T7.1 and T7.4. The
-# file exists now so the command that starts them is already the documented one
-# and does not change later:
+# The observability profile, empty for now. It is started with:
 #
 #   docker compose -f docker-compose.yml -f docker-compose.obs.yml up -d
 #

@@ -17,7 +17,7 @@ ALEMBIC_INI = Path(__file__).resolve().parents[2] / "alembic.ini"
 class CatalogSettings(BaseAppSettings):
     """Everything the chassis needs, plus what only this service has.
 
-    Nothing of its own yet: the fields arrive with the stage that owns them.
+    Adds no fields of its own yet.
     """
 
     service_name: str = "catalog"
