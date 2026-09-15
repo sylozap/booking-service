@@ -89,13 +89,9 @@ class BaseAppSettings(BaseSettings):
     kafka_bootstrap_servers: str
 
     # --- cache --------------------------------------------------------------
-    # The cache accelerates reads and decides nothing (ADR-0012), so a
-    # deployment may run without it and the switch is a supported state rather
-    # than a debugging aid. Five minutes is the window
-    # docs/IMPLEMENTATION_PLAN.md T2.7 fixes: long enough to be worth having,
-    # short enough that the race every cache-aside scheme has -- a reader that
-    # started before a write storing what it read after it -- cannot outlive a
-    # coffee break.
+    # The cache only accelerates reads and decides nothing, so running without
+    # it is a supported mode. The TTL bounds how long a stale entry written by a
+    # concurrent read can survive a write.
     cache_enabled: bool = True
     cache_ttl_seconds: int = 300
     # A cache that has gone slow is worse than one that is gone: without this
@@ -106,12 +102,11 @@ class BaseAppSettings(BaseSettings):
     otlp_endpoint: str | None = None
 
     # --- verifying access tokens -------------------------------------------
-    # Every service checks the tokens it receives itself (ADR-0010), so every
-    # service needs these -- including ``auth``, which verifies with the key it
-    # already holds instead of fetching it from itself.
+    # Every service checks the tokens it receives itself, so every service
+    # needs these, including ``auth``.
     #
-    # The expected ``iss``. A setting rather than a constant so that a token
-    # minted by the auth of the dev cluster is not accepted in prod.
+    # The expected ``iss``, configurable so tokens of one environment are not
+    # accepted in another.
     jwt_issuer: str = "https://barber.local/auth"
     # Base URL of ``auth``, where /.well-known/jwks.json is served. Optional
     # only because ``auth`` does not use it; any other service that installs

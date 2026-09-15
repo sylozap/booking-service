@@ -1,15 +1,8 @@
-"""What a verified token says, as a type the endpoints can use.
+"""Typed view of the claims of a verified token.
 
-The raw claims of a JWT are a dictionary of anything, and a router that reads
-``claims["roles"][0]["salon_id"]`` is a router that crashes on a token shaped
-slightly differently. Everything that comes off the wire is parsed into the
-types here once, at the edge, and the rest of the service sees a
-:class:`Principal`.
-
-These are wire types, not domain types. They describe the contract of
-``docs/04-api-contracts.md`` and know nothing about the rules of any service:
-whether a ``salon_admin`` may do a particular thing is a question for the
-scenario that is being asked, not for the token that arrived.
+Raw JWT claims are parsed once into :class:`Principal`, so the rest of the
+service never reads the claims dictionary. These are wire types and carry no
+rules of any service.
 """
 
 from __future__ import annotations
@@ -26,10 +19,8 @@ __all__ = [
     "principal_from_claims",
 ]
 
-# The ``typ`` claim. A user token and a service token are both signed by the
-# same key and would otherwise be interchangeable, which is how an endpoint
-# under /internal ends up accepting a token minted for a customer.
-# noqa on both: these name a kind of token, they are not credentials.
+# The ``typ`` claim, which keeps user and service tokens from being
+# interchangeable. noqa: these name a kind of token, not credentials.
 ACCESS_TOKEN_TYPE = "access"  # noqa: S105
 SERVICE_TOKEN_TYPE = "service"  # noqa: S105
 
@@ -91,10 +82,7 @@ class Principal:
     def holds(self, role: str, *, salon_id: UUID | None = None) -> bool:
         """Whether the caller holds this role, globally or in this salon.
 
-        A global grant satisfies a scoped question: a global ``master`` is a
-        master in every salon. A scoped grant does not satisfy a question about
-        a different salon, which is the check that keeps one salon's
-        administrator out of another's data.
+        A global grant counts in every salon; a scoped grant only in its own.
         """
         for grant in self.roles:
             if grant.role != role:
@@ -107,13 +95,8 @@ class Principal:
 def principal_from_claims(claims: dict[str, object]) -> Principal:
     """Turn verified claims into a :class:`Principal`.
 
-    Called only after the signature and the registered claims have been
-    checked. Tolerant about shape and strict about meaning: a malformed entry
-    in ``roles`` is dropped rather than raising, because a token that verified
-    is a token this platform issued, and refusing it over a field a newer
-    version added would break every service on the day ``auth`` is deployed
-    first. What is not tolerated is a missing ``sub`` or ``typ`` -- without
-    those the token identifies nobody.
+    Called only after the token has been verified. A malformed ``roles`` entry
+    is dropped, while a missing ``sub`` or ``typ`` is an error.
     """
     subject = claims.get("sub")
     token_type = claims.get("typ")

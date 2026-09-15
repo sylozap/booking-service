@@ -1,22 +1,11 @@
-"""The JWKS client: public keys of ``auth``, cached and kept fresh.
+"""JWKS client that caches the public keys of ``auth`` and keeps them fresh.
 
-Every service verifies tokens itself against these keys, which is what makes a
-direct request to a pod -- past the gateway -- still get rejected (ADR-0010).
-The cost of that decision is this cache, and three properties it has to have.
-
-**It survives ``auth`` being down.** A failed refresh logs and keeps the keys
-it already had. Otherwise the service that issues tokens becomes a service
-every other one dies with, which is exactly the coupling JWKS exists to avoid.
-
-**It picks up a rotation without a restart.** The keys are refreshed on a timer,
-and a token naming a ``kid`` the cache has never seen triggers an immediate
-fetch. Without that, deploying a new signing key would reject every request
-until the TTL happened to elapse.
-
-**One unknown ``kid`` does not become a stampede.** The forced refresh is rate
-limited and serialised behind a lock: a burst of tokens signed by a key that
-genuinely does not exist -- which is what an attacker forging headers produces
--- costs one request to ``auth``, not one per token.
+* A failed refresh keeps the keys already loaded, so the service keeps working
+  while ``auth`` is down.
+* Keys are refreshed on a timer, and an unknown ``kid`` triggers an immediate
+  fetch, so a key rotation needs no restart.
+* Forced refreshes are rate limited and serialised, so a burst of tokens with
+  an unknown ``kid`` costs one request to ``auth``.
 """
 
 from __future__ import annotations
@@ -39,14 +28,11 @@ __all__ = ["JWKS_PATH", "JwksClient", "jwks_verifier", "refreshing"]
 
 _logger = get_logger(__name__)
 
-# Named by RFC 8615 and by docs/04-api-contracts.md.
+# Well-known path defined by RFC 8615.
 JWKS_PATH = "/.well-known/jwks.json"
 
-# One metric, and the decision behind it: when the age crosses the rotation
-# window, this service is about to start rejecting valid tokens and someone has
-# to look at why the refresh stopped. A failed fetch on its own is not worth
-# alerting on -- the cached keys still work -- and the number of cached keys
-# answers no question at all, so neither is declared (section 11).
+# An age beyond the rotation window means the refresh has stopped and valid
+# tokens are about to be rejected.
 JWKS_CACHE_AGE = gauge(
     "jwks_cache_age_seconds",
     "Time since the signing keys were last fetched successfully",
@@ -83,10 +69,8 @@ class JwksClient:
     async def key_for(self, kid: str) -> PublicKey:
         """The key named by a token header, fetching it if it is new.
 
-        An unknown ``kid`` is the signature of a rotation that just happened,
-        and also of a forged header. Both are answered the same way -- try once,
-        no more often than the minimum interval -- because the client cannot
-        tell them apart and the cheap response is correct for both.
+        An unknown ``kid`` triggers one refresh, no more often than the minimum
+        refresh interval.
         """
         key = self._keys.get(kid)
         if key is not None:
@@ -197,10 +181,8 @@ class JwksClient:
 async def refreshing(client: JwksClient) -> AsyncIterator[JwksClient]:
     """Keep the keys of ``client`` fresh for as long as the block lasts.
 
-    Used from the lifespan of a service. The task is held in a local variable
-    rather than created and forgotten: a task nobody references can be
-    collected mid-flight and its exception never surfaces
-    (docs/CODING_STANDARDS.md section 13).
+    Used from the lifespan of a service. The task is kept in a local variable so
+    it cannot be garbage collected mid-flight.
     """
     stop = asyncio.Event()
     task = asyncio.create_task(client.refresh_forever(stop), name="jwks-refresh")

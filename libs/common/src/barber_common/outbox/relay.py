@@ -1,17 +1,9 @@
-"""The worker that moves events from the outbox into Kafka.
+"""Worker that publishes outbox rows to Kafka.
 
-One pass is: open a transaction, claim a batch with ``FOR UPDATE SKIP LOCKED``,
-publish each row, mark the batch published, commit.
-
-Publishing happens inside the open transaction, which the rest of the project
-forbids. It is deliberate here and it is the only place: the row lock is what
-stops a second replica from publishing the same event, and releasing it before
-the send would give that up. The transaction is short and touches no other
-service.
-
-Delivery is at-least-once. A crash between the send and the commit republishes
-the event with the same ``event_id``, and the consumer drops it as a duplicate.
-Losing it is not recoverable; sending it twice is (ADR-0007).
+Each pass claims a batch with ``FOR UPDATE SKIP LOCKED``, publishes it and marks
+it published in one transaction. Publishing inside the transaction is
+deliberate: the row lock stops another replica from sending the same event.
+Delivery is at-least-once, and a republished event keeps its ``event_id``.
 """
 
 from __future__ import annotations
@@ -72,10 +64,9 @@ class OutboxRelay:
                 await self._report(repository)
                 return 0
 
-            # The connection to the broker is made here rather than in the
-            # lifespan of the service. A broker that is down at startup must
-            # delay events, not stop the service (docs/08-consistency.md); the
-            # call is idempotent, so every later pass costs nothing.
+            # Connected here rather than at startup, so a broker that is down
+            # delays events instead of stopping the service. The call is
+            # idempotent.
             await self._producer.start()
 
             for message in messages:

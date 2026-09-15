@@ -1,17 +1,8 @@
 """Payloads of ``auth.users.v1``.
 
-One source of truth for ``auth``, which writes them, and ``notification``,
-which reads them: a payload that stops matching is caught by mypy on both sides
-rather than in a consumer log (ADR-0005).
-
-The topic carries the account lifecycle and nothing else. ``notification``
-keeps its own table of recipients and fills it from these events, so a
-notification still goes out while ``auth`` is unavailable
-(docs/03-services.md).
-
-These are schemas, not domain types: the fields are the ones on the wire, the
-identifiers are plain ``UUID``, and no rule of the auth service leaks into the
-chassis (ADR-0016).
+Shared by ``auth``, which writes them, and ``notification``, which reads them.
+The topic carries the account lifecycle, from which ``notification`` keeps its
+own table of recipients.
 """
 
 from __future__ import annotations
@@ -41,8 +32,7 @@ USER_AGGREGATE_TYPE = "users"
 class UserEventType(StrEnum):
     """``event_type`` of the envelope, for the producer and the consumer alike.
 
-    A consumer that does not recognise a member logs it and commits: an unknown
-    event type never stops a partition (docs/07-events-and-kafka.md).
+    A consumer logs and commits an event type it does not recognise.
     """
 
     REGISTERED = "user.registered"
@@ -76,11 +66,7 @@ class UserRegistered(_UserEvent):
 class UserEmailConfirmationRequested(_UserEvent):
     """A confirmation link was issued and has to reach the address.
 
-    The token travels in the payload. It is a credential, so three things hold
-    it in check: the topic is internal to the platform, the token expires
-    within a day, and the database keeps only its hash. It is never written to
-    a log record -- the only place it is allowed to appear is the letter
-    (docs/07-events-and-kafka.md).
+    The payload carries the token, which is a credential and is never logged.
     """
 
     email: str

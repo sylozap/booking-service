@@ -1,8 +1,6 @@
-"""A cache whose failures are misses.
+"""Tests of the cache, with Redis working and with Redis failing.
 
-Half of these are about Redis working and half about it not. The second half is
-the point: the cache decides nothing (ADR-0012), so every way it can fail has
-to come out as "nothing found" rather than as a failed request.
+Every failure of Redis has to come out as a miss, never as a failed request.
 """
 
 from __future__ import annotations
@@ -132,11 +130,9 @@ async def test_every_kind_of_failure_reads_as_a_miss(
 
 
 class _ClientThatFails:
-    """Stands in for the Redis client, not for anything the project owns.
+    """Stand-in for the Redis client that fails on demand.
 
-    Mocking is limited to external boundaries (docs/CODING_STANDARDS.md
-    section 14), and the Redis driver is one: there is no way to ask a real
-    server to produce a socket error on demand.
+    A real server cannot be made to produce a socket error on request.
     """
 
     def __init__(self, on_get: object) -> None:

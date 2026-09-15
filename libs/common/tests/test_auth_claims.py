@@ -74,9 +74,8 @@ def test_the_expiry_is_an_aware_moment() -> None:
 def test_a_malformed_role_entry_is_dropped_rather_than_fatal(roles: object) -> None:
     principal = principal_from_claims(claims(roles=roles))
 
-    # The token verified, so the platform issued it. Refusing it over a field
-    # a newer auth added would break every service on the day auth deploys
-    # first (docs/CODING_STANDARDS.md section 10, tolerant reader).
+    # The token verified, so the platform issued it. Rejecting it over a field
+    # added by a newer auth would break services whenever auth deploys first.
     assert principal.roles == ()
 
 

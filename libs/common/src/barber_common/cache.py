@@ -1,26 +1,11 @@
-"""Reading through a cache that is allowed to be missing.
+"""Redis read-through cache the service can run without.
 
-Three properties shape everything here, and all three come from one decision:
-**the cache is never an arbiter** (ADR-0012). It makes reads cheaper and it
-answers no question of correctness, so the service has to work without it.
+* Any Redis error is logged and treated as a miss.
+* Every call runs under a timeout.
+* :meth:`Cache.disabled` builds a cache with no client, for deployments without
+  Redis and for tests.
 
-**A cache failure is a miss.** Every operation swallows the errors Redis can
-raise -- unreachable, timed out, refusing writes -- logs them once at
-``WARNING`` and reports nothing found. A request is never failed because a
-cache is down; the caller falls through to the database it would have used
-anyway.
-
-**Every call has a deadline.** A cache that has become slow is worse than one
-that is gone: without a timeout, the read it was supposed to accelerate now
-waits on it (docs/CODING_STANDARDS.md section 8).
-
-**A disabled cache costs nothing.** :meth:`Cache.disabled` builds one with no
-client behind it, for a deployment that runs without Redis and for the tests
-that have to prove the service still answers.
-
-What is *not* here is the key scheme. Which keys exist, and what invalidates
-them, is knowledge about a particular service's data, and it belongs to that
-service (docs/CODING_STANDARDS.md section 2.3).
+Key schemes and invalidation belong to the service that uses the cache.
 """
 
 from __future__ import annotations
@@ -35,11 +20,8 @@ __all__ = ["Cache", "CacheOutcome", "cache_from_dsn"]
 
 _logger = get_logger(__name__)
 
-# The decision this metric drives: a hit ratio that falls off a cliff is either
-# an invalidation storm -- something is writing far more often than expected --
-# or a Redis that has started refusing. The "error" outcome tells the two
-# apart, and neither is visible from the request metrics, where a cache miss
-# and a cache hit look the same.
+# Cache operations by outcome; the "error" outcome separates a failing Redis
+# from a falling hit ratio.
 CACHE_OPERATIONS = counter(
     "cache_operations_total",
     "Cache reads and writes by outcome",
@@ -178,12 +160,8 @@ class Cache:
     def _report(self, operation: str, outcome: str, error: BaseException) -> None:
         """Record a failure without letting it reach the caller.
 
-        ``WARNING`` and not ``ERROR``: the service handled it, the request is
-        being served from the database, and nobody has to be woken up
-        (docs/CODING_STANDARDS.md section 11). The key is deliberately absent
-        from the record -- it is built from identifiers, and there is no reason
-        to widen what a log line carries for an event that needs no key to be
-        understood.
+        Logged as ``WARNING``, since the request is still served from the
+        database. The key is not included in the record.
         """
         CACHE_OPERATIONS.labels(operation=operation, outcome=outcome).inc()
         _logger.warning(

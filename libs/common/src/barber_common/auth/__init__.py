@@ -1,9 +1,7 @@
-"""Verifying the tokens ``auth`` issues, in every service that receives one.
+"""Verification of the tokens issued by ``auth``.
 
-The gateway checks the signature and so does each service: a request that
-reaches a pod without passing the gateway is rejected by the pod itself
-(ADR-0010). What is shared here is the checking, never the issuing -- minting a
-token needs the private key, and that lives in ``auth`` alone.
+Every service verifies tokens itself instead of trusting the gateway. Issuing
+tokens stays in ``auth``, which alone holds the private key.
 """
 
 from barber_common.auth.claims import (

@@ -1,13 +1,9 @@
-"""OpenTelemetry: spans that survive the boundary between services.
+"""OpenTelemetry tracing across service boundaries.
 
-Tracing is switched by ``OTLP_ENABLED``. While it is off the code still runs:
-the API hands out non-recording spans, instrumentation costs almost nothing,
-and the log fields ``trace_id`` and ``span_id`` stay ``null``. Stages 0 to 6
-run this way, so the day the collector appears nothing has to be written.
-
-Kafka is instrumented in the producer and the consumer rather than here: the
-trace context travels in the message headers, and that is where it is put in
-and taken out.
+Tracing is switched by ``OTLP_ENABLED``. While it is off, spans are
+non-recording and the log fields ``trace_id`` and ``span_id`` stay ``null``.
+Kafka is instrumented in the producer and the consumer, where the trace context
+is written to and read from message headers.
 """
 
 from __future__ import annotations

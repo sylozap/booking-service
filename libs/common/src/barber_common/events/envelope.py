@@ -1,13 +1,8 @@
 """The envelope every event travels in.
 
-Fixed by docs/07-events-and-kafka.md. Changing a field of the envelope breaks
-every consumer of every topic at once, so it is not changed: a payload grows,
-the envelope does not.
-
-The envelope is generic in its payload. ``EventEnvelope[BookingCreated]`` is
-what a producer builds and what a consumer parses, and mypy compares the two
-sides at build time -- the whole reason there is no Schema Registry here
-(ADR-0005).
+The envelope is fixed; only payloads evolve. It is generic in its payload, so
+``EventEnvelope[BookingCreated]`` is checked by mypy on both the producer and
+the consumer side.
 """
 
 from __future__ import annotations

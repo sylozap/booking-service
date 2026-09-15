@@ -1,28 +1,13 @@
-"""Cursor pagination, the only kind of listing this platform has.
+"""Keyset (cursor) pagination for listings.
 
-``offset`` is forbidden (docs/CODING_STANDARDS.md section 9) and the reason is
-not style. Between two page requests rows are inserted and deleted, and an
-offset counts rows: a salon added while a client reads page one pushes one
-entry off the edge of it, and page two starts after the row that was pushed --
-so that entry is never shown. Deleting a row does the opposite and shows one
-twice. On a list that clients page through while other clients write, the two
-happen constantly and silently.
-
-A keyset cursor names the last row seen instead of counting rows before it::
+Offsets are not used: rows inserted or deleted between page requests would make
+an offset skip or repeat entries. A cursor names the last row seen instead::
 
     ORDER BY name, id
     WHERE (name, id) > ('Barber One', '0192f3c1-...')
 
-Rows appearing before that point do not move it, and rows appearing after it
-are simply seen on the next page. That needs two things and this module
-provides both: the sort key must be **unique**, which is why every ordering
-here ends in the primary key, and the comparison must be a **row value** --
-``(a, b) > (x, y)``, not ``a > x AND b > y``, which is a different and wrong
-predicate.
-
-The cursor is opaque to the client: a base64url string with no padding. Opaque
-because it is a sort key, and a client that learns to build one has learned a
-detail of the ORDER BY that then cannot change without breaking them.
+Every ordering ends in the primary key so the sort key is unique, and the
+comparison is a row value. The cursor is an opaque base64url string.
 """
 
 from __future__ import annotations
@@ -59,13 +44,8 @@ MAX_PAGE_SIZE = 100
 class InvalidCursor(DomainError):
     """The cursor is not one this service handed out.
 
-    Not a ``404`` and not a ``400``: a cursor arrives in the query string, so a
-    malformed one is a request that does not match the contract, and the
-    platform answers those with ``422`` and a domain code
-    (docs/04-api-contracts.md).
-
-    The message never quotes the cursor back. It is client-supplied text that
-    would end up in a log line and in an error body.
+    Answered with ``422`` like any other invalid input. The message never
+    quotes the cursor back.
     """
 
     code = "validation_error"
@@ -108,10 +88,8 @@ def decode_cursor(cursor: str, *, arity: int) -> tuple[str, ...]:
 def cursor_uuid(value: str) -> UUID:
     """Read the primary key half of a sort key.
 
-    Every keyset in this platform ends in the primary key, which is a UUID, and
-    a cursor that survived :func:`decode_cursor` can still carry a string that
-    is not one. Refusing it here keeps a malformed cursor a ``422`` rather than
-    a driver error at the point the statement is bound.
+    A value that is not a UUID raises :class:`InvalidCursor`, so a malformed
+    cursor is answered with ``422``.
     """
     try:
         return UUID(value)
@@ -167,12 +145,9 @@ Pagination = Annotated[PageRequest, Depends(page_request)]
 
 
 class Page[ItemT](BaseModel):
-    """One page of a listing, in the shape docs/04-api-contracts.md fixes.
+    """One page of a listing.
 
-    ``next_cursor`` is null on the last page. It is deliberately not a
-    "has_more" boolean next to a total count: a total is a second query whose
-    answer is stale before it is serialised, and no client of this platform
-    renders one.
+    ``next_cursor`` is null on the last page. No total count is returned.
     """
 
     items: list[ItemT]

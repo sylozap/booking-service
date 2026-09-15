@@ -1,9 +1,6 @@
 """The outbox table, identical in every service that publishes events.
 
-A row is written inside the transaction that changes the state. Either both are
-there after the commit or neither is, which is the whole point: publishing to
-the broker from the scenario would leave a booking without its event whenever
-the broker blinks (ADR-0004).
+A row is written in the same transaction as the state change it describes.
 """
 
 from __future__ import annotations
@@ -23,10 +20,8 @@ __all__ = ["OutboxMessage"]
 class OutboxMessage(Base):
     """One event waiting to be published.
 
-    ``id`` doubles as the ``event_id`` of the envelope. That is deliberate:
-    republishing after a crash between the send and the mark carries the same
-    id, so the consumer sees a duplicate it already knows how to drop, instead
-    of a second event it has never seen.
+    ``id`` doubles as the ``event_id`` of the envelope, so a republished event
+    is recognised by consumers as a duplicate.
     """
 
     __tablename__ = "outbox"

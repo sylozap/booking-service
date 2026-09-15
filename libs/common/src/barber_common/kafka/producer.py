@@ -1,19 +1,8 @@
-"""Publishing events to Kafka.
+"""Kafka producer for event envelopes.
 
-Two things travel next to the payload and both matter.
-
-The **key** is the id of the aggregate. Without it the partitioner spreads the
-events of one booking across partitions, ordering is only guaranteed inside a
-partition, and ``booking.cancelled`` overtakes ``booking.created``.
-
-The **headers** carry ``event_type``, ``correlation_id`` and ``traceparent``.
-The first lets a consumer route without parsing the body, the second keeps one
-identifier from the gateway to the notification, and the third keeps the trace
-whole across the broker.
-
-Only the outbox relay is supposed to call this. Publishing straight from a
-scenario loses the atomicity between the state change and the event
-(ADR-0004).
+The message key is the aggregate id, so the events of one aggregate stay in
+order. Headers carry ``event_type``, ``correlation_id`` and ``traceparent``.
+Only the outbox relay publishes through it.
 """
 
 from __future__ import annotations

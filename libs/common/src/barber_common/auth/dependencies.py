@@ -1,26 +1,14 @@
-"""Closing an endpoint with one dependency.
+"""FastAPI dependencies that close an endpoint with an authentication check.
 
 ::
 
     @router.post("/salons")
     async def create_salon(caller: Annotated[Principal, Depends(require_roles("super_admin"))]): ...
 
-Every endpoint of the platform has a role check, and an endpoint without one is
-an unfinished task (docs/CODING_STANDARDS.md section 9). These are what that
-check is made of.
-
-**The gateway's headers are not trusted, and there is no code here that reads
-them.** ``X-User-Id`` arriving from anywhere is ignored; the service verifies
-the token itself, so a request reaching a pod directly -- a port-forward, a
-neighbour in the cluster, a hole in a NetworkPolicy -- is rejected by the pod
-(ADR-0010).
-
-**Roles are checked here, salons are not.** ``require_roles`` answers "does this
-caller hold one of these roles at all", because a generic dependency cannot see
-which salon the request is about. Whether the caller's ``salon_admin`` grant is
-for *this* salon is a question the scenario asks with
-:meth:`~barber_common.auth.claims.Principal.holds` once it knows which salon it
-is dealing with.
+The service verifies the bearer token itself; gateway headers such as
+``X-User-Id`` are never read. Roles are checked here, while the salon scope is
+checked by the scenario with
+:meth:`~barber_common.auth.claims.Principal.holds`.
 """
 
 from __future__ import annotations
@@ -120,9 +108,7 @@ def require_roles(*roles: str) -> Callable[[Request], Awaitable[Principal]]:
     async def dependency(request: Request) -> Principal:
         principal = await current_user(request)
         if not principal.has_any_role(allowed):
-            # INFO, not ERROR: a caller reaching for something they may not
-            # have is normal traffic, and an alert on the error rate that fires
-            # on it is an alert nobody reads (section 11).
+            # INFO, not ERROR: a refused caller is normal traffic.
             _logger.info("access refused", subject=principal.subject)
             raise Forbidden("This operation is not allowed for your role")
         return principal
@@ -163,8 +149,7 @@ def require_scopes(*scopes: str) -> Callable[[Request], Awaitable[Principal]]:
 def _bearer_token(request: Request) -> str:
     """Pull the token out of the Authorization header.
 
-    The header itself is never logged and never put in an error message
-    (docs/CODING_STANDARDS.md section 11).
+    The header is never logged and never put in an error message.
     """
     header = request.headers.get(AUTHORIZATION_HEADER)
     if header is None:

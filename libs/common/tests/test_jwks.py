@@ -19,9 +19,8 @@ SECOND_KID = "key-two"
 class FakeAuth:
     """A stand-in for the JWKS endpoint of ``auth``.
 
-    Not a mock of our own code -- section 14 forbids that -- but a stub of the
-    network boundary, wired in as an httpx transport so everything between the
-    client and the socket is the real thing.
+    Wired in as an httpx transport, so everything above the network boundary
+    is the real code.
     """
 
     def __init__(self, kids: list[str]) -> None:

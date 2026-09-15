@@ -1,24 +1,19 @@
-"""The consumer runner: one place where every event is handled the same way.
+"""Consumer runner that handles every event the same way.
 
-The order of the steps is the contract, and it is the reverse of the obvious
-one. The offset is committed **after** the transaction commits, never before:
-a crash in between replays the message, and the replay is caught by
-``processed_events``. Committing first would lose the event instead, and a lost
-event is not recoverable (ADR-0007).
+The offset is committed only after the transaction of the handler commits; a
+message replayed after a crash is dropped by ``processed_events``.
 
 What the runner does around a handler:
 
-* restores ``correlation_id`` and the trace context from the message headers,
-  so a log line written in the consumer joins the request that caused it;
-* routes by ``event_type``; an unknown type is logged and committed, because a
-  new event type published by a newer service must not stop a partition;
+* restores ``correlation_id`` and the trace context from the message headers;
+* routes by ``event_type``, logging and committing unknown types;
 * opens one transaction, claims the event for the consumer group, calls the
   handler, commits;
-* classifies a failure: a message that does not parse goes to the dead letter
-  topic at once, a handler that raised is retried and then goes there too.
+* sends unparseable messages to the dead letter topic at once, and failed
+  handlers there after the retries.
 
-A handler receives the session of that transaction and does its work in it. It
-does not commit and it does not talk to the broker.
+A handler works in the session of that transaction and neither commits nor
+talks to the broker.
 """
 
 from __future__ import annotations
@@ -68,10 +63,8 @@ EVENTS_PROCESSED = counter(
     labelnames=("topic", "event_type", "result"),
 )
 
-# The number that says whether the asynchronous half of the platform keeps up.
-# Partition is a label because a lag on one partition and a lag on all of them
-# are different incidents; there are three per topic, so the cardinality is
-# bounded by design.
+# Consumer lag per partition; the number of partitions per topic is fixed, so
+# the cardinality is bounded.
 CONSUMER_LAG = gauge(
     "kafka_consumer_lag",
     "Messages between the committed position of the group and the end of the partition",
@@ -92,10 +85,8 @@ class ProcessingResult(StrEnum):
 class RetryPolicy:
     """Exponential backoff with jitter between the attempts on one message.
 
-    Deliberately not the policy of ``barber_common.http``: that one retries a
-    request and is parameterised by status codes, this one retries a
-    transaction and is bounded by the time a partition may be held. Sharing
-    them would tie the timing of the broker to the timing of HTTP calls.
+    Separate from the HTTP retry policy: it retries a transaction and is bounded
+    by how long a partition may be held.
     """
 
     attempts: int = 3

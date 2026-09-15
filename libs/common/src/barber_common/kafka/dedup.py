@@ -1,13 +1,9 @@
 """Deduplication of incoming events.
 
-Delivery is at-least-once, so the same event arrives more than once whenever a
-consumer dies between the effect and the offset commit. The defence is a table:
-``processed_events`` holds the pair ``(event_id, consumer_group)``, and the row
-is written in the same transaction as the effect. Either both are there or
-neither is, and a redelivery finds the row and stops.
-
-The pair, not the id alone: two consumer groups read the same topic and both
-have to see the event once (ADR-0007).
+``processed_events`` stores ``(event_id, consumer_group)`` in the same
+transaction as the effect of the handler, so a redelivered event is detected
+and skipped. The consumer group is part of the key because several groups read
+the same topic.
 """
 
 from __future__ import annotations
@@ -45,14 +41,9 @@ class ProcessedEventRepository:
     async def claim(self, event_id: UUID) -> bool:
         """Take the event for this group, reporting whether it is new.
 
-        ``INSERT ... ON CONFLICT DO NOTHING`` rather than "select, then insert":
-        two replicas of one group can be handling the same redelivery at the
-        same moment, and between the select and the insert both would decide
-        the event is new. Here the second one blocks on the row of the first,
-        then gets nothing back and knows it lost.
-
-        Called inside the transaction that carries the effect: a commit that
-        writes the effect writes this row, and a rollback takes both away.
+        Uses ``INSERT ... ON CONFLICT DO NOTHING``, so two replicas handling the
+        same redelivery cannot both claim it. Called inside the transaction that
+        carries the effect.
         """
         statement = (
             insert(ProcessedEvent)

@@ -1,11 +1,8 @@
 """Error model of the platform: RFC 9457 ``application/problem+json``.
 
-Every failure leaves a service in the same shape, with a domain ``code`` from
-the catalogue in ``docs/04-api-contracts.md`` and the ``correlation_id`` of the
-request, so a client report can be traced to a log line without guessing.
-
-A service raises :class:`DomainError` subclasses; turning them into responses
-is the job of the ``api`` layer, never of the scenario that raised them.
+Every failure is returned in the same shape, with a domain ``code`` and the
+``correlation_id`` of the request. Services raise :class:`DomainError`
+subclasses, and the ``api`` layer turns them into responses.
 """
 
 from __future__ import annotations

@@ -1,15 +1,8 @@
-"""Telling one database failure from another.
+"""Helpers that tell database integrity errors apart.
 
-``IntegrityError`` covers a unique violation, an exclusion violation, a failed
-check and a broken foreign key alike, and treating them as one thing is how a
-duplicate idempotency key gets reported as a taken slot. So the code and the
-constraint are read explicitly, and each caller decides what its own SQLSTATE
-means (docs/CODING_STANDARDS.md section 8).
-
-Getting at them takes one indirection. The asyncpg dialect of SQLAlchemy
-re-raises the driver exception as its own, copying ``sqlstate`` across but not
-the name of the constraint, and keeps the original as ``__cause__``. That
-detail is here so that no service has to know it.
+They read the SQLSTATE and the constraint name from a SQLAlchemy
+``DBAPIError``. The asyncpg dialect keeps the constraint name only on
+``__cause__``, and these helpers hide that detail from services.
 """
 
 from __future__ import annotations
@@ -27,7 +20,7 @@ __all__ = [
 ]
 
 SQLSTATE_UNIQUE_VIOLATION = "23505"
-# The main invariant of the platform arrives as this one (ADR-0002).
+# An overlapping booking is rejected by the exclusion constraint with this code.
 SQLSTATE_EXCLUSION_VIOLATION = "23P01"
 SQLSTATE_FOREIGN_KEY_VIOLATION = "23503"
 SQLSTATE_CHECK_VIOLATION = "23514"

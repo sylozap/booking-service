@@ -82,7 +82,7 @@ def test_a_cursor_the_service_did_not_produce_is_refused(cursor: str) -> None:
 
 
 def test_an_invalid_cursor_is_a_422_with_a_domain_code() -> None:
-    """docs/04-api-contracts.md: input errors are 422, never 400."""
+    """Input errors are answered with 422, never 400."""
     assert InvalidCursor.http_status == 422
     assert InvalidCursor.code == "validation_error"
 

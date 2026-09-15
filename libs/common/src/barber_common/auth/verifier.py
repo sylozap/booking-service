@@ -1,21 +1,8 @@
-"""Checking a token: the signature, then the claims that must hold.
+"""Token verification: the signature, then the claims that must hold.
 
-One place decides what a valid token is, and every service shares it. The rules
-are deliberately narrow.
-
-**RS256 and nothing else.** The algorithm is fixed here rather than read from
-the token header. A verifier that trusts the header accepts ``alg: none`` and
-accepts a token signed with HMAC using the public key as the secret -- the two
-oldest ways to forge a JWT.
-
-**The issuer is checked.** Otherwise a token minted by the ``auth`` of the dev
-cluster is accepted by production, which is the same signing key away from
-being true.
-
-**Expiry has a little leeway and no more.** Clocks between pods differ by
-milliseconds and the leeway is there for that. It is not a grace period: an
-access token that cannot be revoked is only acceptable because it expires
-(ADR-0010).
+* Only RS256 is accepted; the algorithm is never taken from the token header.
+* The issuer must match the configured one.
+* Expiry allows a small leeway for clock skew between pods.
 """
 
 from __future__ import annotations
@@ -36,10 +23,8 @@ ALGORITHM = "RS256"
 class InvalidToken(Exception):
     """The token is not one this platform issued, or it no longer counts.
 
-    Deliberately one exception for every reason -- bad signature, expired,
-    wrong issuer, unknown key, malformed. The dependency turns all of them into
-    the same ``401``: telling a caller which check failed is telling an
-    attacker what to fix next.
+    One exception for every reason, so the caller cannot tell which check
+    failed.
     """
 
 
@@ -91,10 +76,8 @@ class TokenVerifier:
     def _kid_of(self, token: str) -> str:
         """The key name from the JOSE header.
 
-        Read before the signature is checked, which is unavoidable -- the key
-        has to be chosen before it can be used -- and safe, because the header
-        decides nothing except which key is tried. A forged ``kid`` names a key
-        that does not exist, or one that does not match the signature.
+        Read before the signature is checked; it only selects which key is
+        tried.
         """
         try:
             header = jwt.get_unverified_header(token)

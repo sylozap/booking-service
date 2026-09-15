@@ -170,9 +170,7 @@ async def test_the_gateway_headers_are_not_trusted(app: FastAPI) -> None:
             "/me", headers={"X-User-Id": str(uuid4()), "X-Roles": "super_admin"}
         )
 
-    # A request reaching a pod past the gateway -- a port-forward, a neighbour
-    # in the cluster, a hole in a NetworkPolicy -- is rejected by the pod
-    # itself (ADR-0010).
+    # A request reaching a pod past the gateway is rejected by the pod itself.
     assert response.status_code == 401
 
 
