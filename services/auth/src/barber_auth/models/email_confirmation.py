@@ -16,10 +16,8 @@ __all__ = ["EmailConfirmation"]
 class EmailConfirmation(Base):
     """One issued confirmation link.
 
-    Single use and short lived: ``used_at`` is stamped instead of the row being
-    deleted, so a second click on the same link is a token that was used rather
-    than a token that never existed, and the background cleanup of T1.12 has
-    something to prune.
+    Single use and short lived. ``used_at`` is stamped instead of deleting the
+    row, so a second click reports the link as already used.
     """
 
     __tablename__ = "email_confirmations"

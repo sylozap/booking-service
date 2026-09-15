@@ -16,10 +16,7 @@ from barber_auth.adapters.rsa_signer import (
     thumbprint_of_pem,
 )
 
-# RFC 7638 section 3.1 publishes an RSA key and the thumbprint it must produce.
-# Deriving a different value would mean tokens named by a kid no other
-# implementation computes, which is the kind of thing that is discovered during
-# an integration with someone else's verifier rather than here.
+# The RSA key and expected thumbprint published in RFC 7638, section 3.1.
 RFC_7638_MODULUS = (
     "0vx7agoebGcQSuuPiLJXZptN9nndrQmbXEps2aiAFbWhM78LhWx4cbbfAAtVT86zwu1RK7aPFFxuhDR1L6tSoc_B"
     "JECPebWKRXjBZCiFV4n3oknjhMstn64tZ_2W-5JsGY4Hc5n9yBXArwl93lqt7_RN5w6Cf0h4QyQ5v-65YGjQR0_F"

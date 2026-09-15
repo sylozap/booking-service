@@ -1,25 +1,9 @@
-"""Pruning what auth no longer needs.
+"""Background cleanup of expired rows.
 
-Three tables grow without bound and nothing else deletes from them: refresh
-tokens, email confirmations, and the deduplication table of the consumers.
-Left alone they become the reason a database is restored from a backup.
-
-**Rows are deleted by expiry and never by state.** That distinction is the
-whole of the correctness of this worker. A refresh token that is revoked but
-has not expired is exactly what makes theft detectable: presenting it again is
-reuse, and reuse revokes the family (T1.7). Delete it early and the stolen
-token stops being reuse and becomes an unknown token -- one 401 instead of a
-closed session, and the family the thief also holds stays alive. The same
-applies to a spent email confirmation: while its row exists, a second click on
-the link is a token that was used, and once it is gone the two are
-indistinguishable.
-
-So a row leaves only once it can no longer mean anything, and a retention
-window on top of that leaves something to read during an incident.
-
-**Deletion is batched.** One statement that deletes a month of rows holds a
-long transaction on a large table and blocks the writes the service is there
-to serve. Each pass takes a bounded batch, commits, and comes back.
+Prunes refresh tokens, email confirmations and processed events. Rows are
+deleted only after they expire plus a retention window, never by state, so a
+revoked refresh token still detects reuse and a spent confirmation link still
+reports as used. Deletion runs in bounded batches.
 """
 
 from __future__ import annotations
@@ -47,12 +31,8 @@ __all__ = ["CleanupWorker", "CleanupSummary"]
 
 _logger = get_logger(__name__)
 
-# Two metrics, and the decision behind each. The moment of the last successful
-# pass is what an alert watches: if it stops moving, the tables are growing and
-# somebody has to find out why. The counter says whether the passes are
-# actually removing anything, which is the difference between "the worker runs"
-# and "the worker works". The table is a label because there are three of them
-# and they age differently; nothing here is labelled by an identifier.
+# The moment of the last successful pass, for an alert on a stopped worker, and
+# rows removed per table.
 CLEANUP_LAST_RUN = gauge(
     "auth_cleanup_last_success_timestamp",
     "When the cleanup worker last completed a pass",
@@ -98,12 +78,9 @@ class CleanupWorker:
         self._interval_seconds = interval_seconds
 
     async def run_once(self, *, now: datetime | None = None) -> CleanupSummary:
-        """One pass over the three tables. Returns what it removed.
+        """One pass over the three tables, one transaction per table.
 
-        Each table gets its own transaction. One transaction for all three
-        would hold locks on the refresh tokens while the deduplication table is
-        being scanned, and there is no invariant spanning them that would need
-        the atomicity.
+        Returns what it removed.
         """
         moment = now or datetime.now(UTC)
 
@@ -130,10 +107,7 @@ class CleanupWorker:
     async def run_forever(self, stop: asyncio.Event) -> None:
         """Keep pruning until asked to stop.
 
-        Started from the lifespan, so a SIGTERM stops it between passes rather
-        than in the middle of one. A pass that fails is logged and retried on
-        the next tick: the rows are still there, and an exception here must not
-        take the service down with it.
+        A failed pass is logged and retried on the next tick.
         """
         _logger.info("cleanup worker started", interval_seconds=self._interval_seconds)
         while not stop.is_set():
@@ -173,10 +147,7 @@ class CleanupWorker:
     async def _prune_refresh_tokens(self, now: datetime) -> int:
         """Delete tokens that expired longer ago than the retention window.
 
-        By ``expires_at`` and never by ``revoked_at``: a revoked token that has
-        not expired yet is what turns a second presentation into detectable
-        reuse, and deleting it early would leave the thief's copy of the family
-        alive (T1.7).
+        Filtered by ``expires_at``, never by ``revoked_at``.
         """
         cutoff = now - self._token_retention
         return await self._delete_batch(
@@ -200,12 +171,7 @@ class CleanupWorker:
         )
 
     async def _prune_processed_events(self, now: datetime) -> int:
-        """Delete deduplication rows older than the retention window.
-
-        The row exists to recognise a redelivery. Kafka will not redeliver a
-        message a week later, so past that the row protects nothing and only
-        costs storage (ADR-0007).
-        """
+        """Delete deduplication rows older than the retention window."""
         cutoff = now - self._processed_event_retention
         return await self._delete_batch(
             model=ProcessedEvent,
@@ -222,10 +188,7 @@ class CleanupWorker:
     ) -> int:
         """Delete at most one batch of matching rows, in one transaction.
 
-        The subquery is what bounds it: ``DELETE ... WHERE key IN (SELECT ...
-        LIMIT n)``. A plain ``DELETE ... WHERE`` would take every matching row
-        in one statement, and on a table that has been growing for a month
-        that is a long transaction blocking the writes this service exists for.
+        Bounded by ``DELETE ... WHERE key IN (SELECT ... LIMIT n)``.
         """
         async with unit_of_work(self._session_factory) as session:
             candidates = select(key).where(condition).limit(self._batch_size).scalar_subquery()

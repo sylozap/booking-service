@@ -1,9 +1,6 @@
 """Registration: the account, its role, its confirmation token and two events.
 
-All four are one transaction. A user created without the ``user.registered``
-event is a user ``notification`` never learns about, and an event published for
-a registration that rolled back is a letter to an account that does not exist
-(ADR-0004).
+All of them are written in one transaction.
 """
 
 from __future__ import annotations
@@ -87,10 +84,8 @@ class RegisterUser:
         normalized_phone = normalize_phone(phone)
         check_password_policy(password, min_length=self._password_min_length)
 
-        # argon2 is deliberately expensive and holds the CPU for tens of
-        # milliseconds; run in the event loop it would stall every other
-        # request of this worker. It also happens before BEGIN, so the cost is
-        # not paid while holding a connection.
+        # argon2 holds the CPU for tens of milliseconds, so it runs in a thread
+        # and before the transaction opens.
         password_hash = await asyncio.to_thread(self._hasher.hash, password)
 
         async with transaction(self._session):
@@ -130,18 +125,15 @@ class RegisterUser:
         # not undo an account that exists.
         self._mailer.send_confirmation(email=registered.email, token=issued.token)
 
-        # No email and no phone in the record: section 11 allows the identifier
-        # of the user and nothing else about them.
+        # Only the user id is logged, never the email or phone.
         _logger.info("user registered", user_id=str(registered.user_id))
         return registered
 
     async def _reject_taken_contacts(self, *, email: str, phone: str) -> None:
         """Answer a duplicate with the contact that is taken.
 
-        A pre-check rather than only the constraint, because the constraint
-        cannot say anything useful: it fires on whichever index PostgreSQL
-        reached first, while the caller wants to know which of the two contacts
-        to change.
+        Checked before the insert, because the unique violation does not say
+        which of the two contacts collided.
         """
         if await self._users.get_by_email(email) is not None:
             raise EmailAlreadyRegistered("This email is already registered")
@@ -161,10 +153,7 @@ class RegisterUser:
 def _translate_unique_violation(error: IntegrityError) -> Exception:
     """Turn a 23505 on ``users`` into the domain error that names the contact.
 
-    The SQLSTATE is checked explicitly and the original error is returned
-    untouched when it is anything else: catching ``IntegrityError`` as a whole
-    would report a broken foreign key as a duplicate email
-    (docs/CODING_STANDARDS.md section 8).
+    Any other error is returned unchanged.
     """
     if sqlstate_of(error) != SQLSTATE_UNIQUE_VIOLATION:
         return error

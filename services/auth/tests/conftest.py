@@ -1,13 +1,7 @@
 """Fixtures of the auth suite.
 
-The database is created once per session and brought up by the real
-migrations -- the same scripts the migration Job runs. Nothing here builds a
-schema from the models: a schema that never went through Alembic leaves the
-migrations untested until the first deployment.
-
-Isolation is a rollback. Every test gets sessions bound to one connection with
-an open transaction, and whatever it writes disappears when it ends, so two
-tests writing to ``users`` never see each other.
+The database is created once per session by the real migrations. Each test
+runs on one connection inside a transaction that is rolled back at the end.
 """
 
 from __future__ import annotations
@@ -52,11 +46,8 @@ DATABASE_NAME = "auth_test"
 PLACEHOLDER_DSN = "postgresql+asyncpg://auth:secret@localhost:5432/auth"
 
 
-# 2048 bits and not the 4096 of scripts/gen_keys.py: this is the smallest size
-# the signer accepts, generating it is roughly ten times faster, and no test
-# asserts anything about the key size. Generated per session, never stored --
-# a PEM committed to the repository would be a signing key in git history and
-# would trip scripts/check-secrets.sh, which is exactly the point of that check.
+# 2048 bits, the smallest size the signer accepts, because it is much faster to
+# generate. Generated per session and never stored.
 TEST_KEY_SIZE_BITS = 2048
 
 
@@ -74,15 +65,10 @@ _DEFAULT_PRIVATE_KEY: str | None = None
 
 
 def default_private_key_pem() -> str:
-    """The one key every settings object of this run shares.
+    """The one signing key shared by every settings object of this run.
 
-    A module that overrides ``settings`` -- the service-client tests do -- gets
-    a second settings object, and if each one generated its own key it would
-    sign with a key the session-scoped ``signer`` cannot verify. That failure
-    only appears when the whole suite runs, which is the worst kind. One key
-    per run also spares the suite a dozen RSA generations.
-
-    A test that needs a *different* key asks for one with
+    Modules that override ``settings`` still sign with a key the session-scoped
+    ``signer`` can verify. A test that needs a different key calls
     :func:`generate_private_key_pem`.
     """
     global _DEFAULT_PRIVATE_KEY
@@ -94,13 +80,8 @@ def default_private_key_pem() -> str:
 def build_settings(**overrides: object) -> AuthSettings:
     """Settings of the service under test, with no environment behind them.
 
-    argon2 is deliberately cheap here. The production parameters spend 64 MiB
-    and tens of milliseconds per hash, and a suite that registers users would
-    pay that on every test for a property none of them assert.
-
-    A signing key is generated unless the caller passes one. It is the one
-    field with no usable default in production, so every test that builds
-    settings would otherwise have to know about it.
+    argon2 parameters are cheap to keep the suite fast. A signing key is
+    generated unless the caller passes one.
     """
     fields: dict[str, object] = {
         "environment": Environment.TEST,
@@ -199,17 +180,10 @@ def signer(settings: AuthSettings) -> RsaTokenSigner:
 async def concurrent_session_factory(
     auth_dsn: str,
 ) -> AsyncIterator[async_sessionmaker[AsyncSession]]:
-    """Sessions on genuinely separate connections, committing for real.
+    """Sessions on separate connections that really commit.
 
-    The ordinary ``session_factory`` puts every session on one connection
-    inside one transaction and rolls it back at the end. That is the right
-    trade for almost everything and useless for the one thing it cannot show:
-    two requests contending for the same row. ``SELECT ... FOR UPDATE`` on a
-    single connection blocks against itself or sees its own uncommitted work,
-    so the rotation race (T1.7) needs real connections and real commits.
-
-    The price is that a test using this fixture cleans up after itself -- see
-    the users it creates being deleted in ``tests/integration/test_refresh_race.py``.
+    For tests of row lock contention, which a single rolled-back connection
+    cannot show. Tests using it clean up the rows they create.
     """
     engine = create_engine(auth_dsn, pool_size=5, max_overflow=5)
     try:
@@ -333,11 +307,9 @@ def app_with_verifier(
 ) -> Iterator[FastAPI]:
     """The application with token verification wired to the test database.
 
-    ``create_application`` installs the verifier in the lifespan, which does
-    not run here, so the same wiring is done against the rolled-back session
-    factory. Everything else is production code: the tokens are real, signed by
-    the real key and checked by the real verifier, so a test cannot accidentally
-    grant itself a role by handing the endpoint a dictionary.
+    The lifespan does not run in tests, so the verifier is installed here
+    against the rolled-back session factory. Tokens are real and verified by
+    the real verifier.
     """
     use_authentication(
         app,

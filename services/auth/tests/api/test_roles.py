@@ -262,9 +262,8 @@ async def test_a_granted_role_reaches_the_next_access_token(
         )
         after = (await client.post(REFRESH, json={"refresh_token": before["refresh_token"]})).json()
 
-    # The token issued before the grant says nothing about it; the one issued
-    # after the refresh does. That fifteen-minute delay is the cost of
-    # verifying tokens without asking anyone (ADR-0010).
+    # The token issued before the grant does not carry the role; the one issued
+    # after the refresh does.
     assert _roles_in(before["access_token"]) == [{"role": "client", "salon_id": None}]
     assert {"role": "master", "salon_id": str(SALON)} in _roles_in(after["access_token"])
 
@@ -387,8 +386,7 @@ async def test_the_endpoints_are_documented_in_the_openapi_contract(
 
     operations = document["paths"]["/api/v1/users/{user_id}/roles"]
     assert set(operations["post"]["responses"]) >= {"201", "403", "404", "422"}
-    # The delay before a granted role appears in a token is part of the
-    # contract, not folklore (ADR-0010).
+    # The delay before a granted role appears in a token is documented.
     assert "refresh" in operations["post"]["description"].lower()
 
 

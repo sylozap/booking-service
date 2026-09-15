@@ -16,10 +16,8 @@ __all__ = ["User"]
 class User(Base):
     """One account.
 
-    ``email`` and ``phone`` are stored normalised -- lower case and E.164 --
-    because the uniqueness of a user is decided by the indexes below, and an
-    index compares what it was given. Normalising on read would leave the
-    database holding four spellings of one phone number.
+    ``email`` is stored in lower case and ``phone`` in E.164, so the unique
+    indexes compare normalised values.
     """
 
     __tablename__ = "users"
@@ -41,9 +39,7 @@ class User(Base):
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
 
     __table_args__ = (
-        # Functional: docs/05-data-model.md fixes uniqueness on lower(email),
-        # and a plain unique constraint would let Ivan@mail and ivan@mail be
-        # two accounts of one person.
+        # Functional index, so addresses differing only in case are one account.
         Index("uq_users_lower_email", func.lower(email), unique=True),
         Index("uq_users_phone", "phone", unique=True),
     )

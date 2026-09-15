@@ -1,15 +1,9 @@
-"""Roles a user can hold, and who may hand them out.
+"""Roles a user can hold, and who may grant them.
 
-A role is either global or scoped to one salon. ``client``, ``master`` and
-``super_admin`` are global; ``salon_admin`` is meaningless without the salon it
-administers, and :meth:`Role.is_scoped_to_salon` is what says so in one place
-instead of in every scenario that assigns a role.
-
-:func:`may_grant` is the authorisation rule of T1.9, written as a pure function
-over what the caller holds. It takes domain grants rather than a verified token
-because the domain does not depend on the chassis
-(docs/CODING_STANDARDS.md section 2.2); translating one into the other is the
-job of the scenario, which is allowed to know about both.
+A grant is either global or scoped to one salon; ``salon_admin`` always needs a
+salon, as :meth:`Role.is_scoped_to_salon` says. :func:`may_grant` is the
+authorisation rule for granting roles, as a pure function over the grants the
+caller holds.
 """
 
 from __future__ import annotations
@@ -23,7 +17,7 @@ __all__ = ["GRANTABLE_ROLES", "Role", "RoleGrant", "may_grant"]
 
 
 class Role(StrEnum):
-    """The four roles of docs/04-api-contracts.md."""
+    """The four roles of the platform."""
 
     CLIENT = "client"
     MASTER = "master"
@@ -46,10 +40,8 @@ GRANTABLE_ROLES = frozenset({Role.MASTER, Role.SALON_ADMIN, Role.SUPER_ADMIN})
 class RoleGrant:
     """One role a user holds, and the salon it is limited to, if any.
 
-    ``salon_id`` is ``None`` for the global roles. The same shape ends up
-    inside the ``roles`` claim of an access token, so a service reading the
-    token learns not just that someone is a ``salon_admin`` but of which salon
-    (docs/04-api-contracts.md).
+    ``salon_id`` is ``None`` for global roles. The same shape is used in the
+    ``roles`` claim of an access token.
     """
 
     role: Role
@@ -76,16 +68,8 @@ def may_grant(
 ) -> bool:
     """Whether a caller holding ``held`` may grant ``role`` in ``salon_id``.
 
-    Two rules and no more.
-
-    A ``super_admin`` grants anything, anywhere. A ``salon_admin`` grants
-    ``master``, and only inside a salon they administer -- which is the check
-    that keeps one salon's administrator out of another's staff list.
-
-    Notably a ``salon_admin`` cannot appoint another ``salon_admin``, not even
-    in their own salon. Handing over a salon is a decision for the person who
-    granted the salon in the first place; without that rule an administrator
-    multiplies themselves and the owner is the last to know.
+    A ``super_admin`` grants any role anywhere. A ``salon_admin`` grants only
+    ``master``, and only in a salon they administer.
     """
     if role not in GRANTABLE_ROLES:
         return False

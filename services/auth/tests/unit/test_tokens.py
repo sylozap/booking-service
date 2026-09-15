@@ -73,8 +73,8 @@ def test_a_scoped_role_names_its_salon() -> None:
 
     built = claims(roles=(RoleGrant(Role.SALON_ADMIN, salon_id),))
 
-    # This is what lets a service decide "admin of which salon" without asking
-    # auth anything (docs/04-api-contracts.md).
+    # A service can tell which salon the admin role applies to without asking
+    # auth.
     assert built["roles"] == [{"role": "salon_admin", "salon_id": str(salon_id)}]
 
 
@@ -93,8 +93,7 @@ def test_the_token_says_who_issued_it_and_what_it_is() -> None:
     built = claims(issuer="https://barber.dev/auth")
 
     assert built["iss"] == "https://barber.dev/auth"
-    # T1.10 issues service tokens from the same endpoint family; typ is what
-    # lets /internal refuse a user token by looking at the token.
+    # typ lets /internal endpoints refuse a user token.
     assert built["typ"] == "access"
 
 

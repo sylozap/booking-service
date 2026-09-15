@@ -95,7 +95,6 @@ def test_the_settings_never_print_the_key(
 
     settings = make_settings(jwt_private_key=pem)
 
-    # SecretStr is what stands between a key and a log line that dumps the
-    # settings object (docs/CODING_STANDARDS.md section 12).
+    # SecretStr keeps the key out of a log line that dumps the settings.
     assert pem not in repr(settings)
     assert pem not in str(settings)

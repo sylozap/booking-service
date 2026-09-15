@@ -17,13 +17,8 @@ __all__ = ["RefreshToken"]
 class RefreshToken(Base):
     """One refresh token of one user.
 
-    Only the hash is stored: a token is a credential, and a database dump must
-    not be a set of working sessions.
-
-    ``family_id`` is what makes theft detectable. Every rotation links the new
-    token to the family of the old one, so a token presented after it was
-    already exchanged means two parties hold the same credential, and the whole
-    family is revoked rather than the single row (T1.7).
+    Only the hash is stored. ``family_id`` links every rotated token to its
+    predecessors, so reuse of a spent token revokes the whole family.
     """
 
     __tablename__ = "refresh_tokens"

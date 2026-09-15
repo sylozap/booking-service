@@ -1,25 +1,13 @@
 """Issuing, rotating and revoking token pairs.
 
-Three scenarios over one table, and the interesting one is the middle.
+* Login checks the password and a confirmed address, issues an access token
+  and opens a new refresh token family.
+* Refresh exchanges a live refresh token for a new pair under a row lock. A
+  token that was already exchanged revokes its whole family.
+* Logout revokes one family or every family of a user; issued access tokens
+  keep working until they expire.
 
-**Login** (T1.6) checks a password and a confirmed address, then mints an
-access token and opens a new refresh family.
-
-**Refresh** (T1.7) exchanges a live refresh token for a new pair inside the
-same family, and treats a token that was already exchanged as evidence of
-theft: the whole family dies, including the pair handed out a moment ago. The
-check and the rotation happen under a row lock, in one transaction. Without the
-lock, two requests arriving with one token both read it as live and both mint a
-pair, which is precisely the outcome the family mechanism exists to detect.
-
-**Logout** (T1.8) revokes a family, or every family of a user. It ends the
-ability to *renew* a session; the access tokens already out there keep working
-until they expire, which is the deliberate cost of verifying them without
-asking anyone (ADR-0010).
-
-No event is published by any of them. A login is not a fact another service
-reacts to, and putting one on the bus would mean a topic carrying, message by
-message, when each user was at their computer.
+None of them publishes an event.
 """
 
 from __future__ import annotations
@@ -77,12 +65,9 @@ class TokenPair:
 
 @dataclass(frozen=True, slots=True)
 class SessionContext:
-    """Where a session was opened from, for the row and for nothing else.
+    """Where a session was opened from.
 
-    Recorded so a user looking at their sessions can recognise them, and so an
-    incident can be read. Never used as a security check: an address and a
-    user agent are both trivially forged, and a rotation that refused a token
-    because the network changed would log out everyone who left the office.
+    Stored for display and investigation only, never used as a security check.
     """
 
     user_agent: str | None = None
@@ -156,10 +141,7 @@ class _TokenMinter:
     async def _grants_of(self, user_id: UserId) -> tuple[RoleGrant, ...]:
         """The roles that go into the token, read at the moment it is signed.
 
-        Read every time rather than carried over from the previous token: a
-        role granted while a session was open reaches the user on their next
-        refresh, which is the fifteen-minute delay docs/04-api-contracts.md
-        describes and the reason role changes are not instant.
+        Read on every issue, so role changes reach the user on the next refresh.
         """
         return tuple(
             RoleGrant(
@@ -205,19 +187,9 @@ class IssueTokenPair:
         """Exchange an address and a password for a pair of tokens."""
         issued_at = now or datetime.now(UTC)
 
-        # The lookup gets a transaction of its own, and it is closed before the
-        # hash is verified. Two reasons, and both are easy to get wrong.
-        #
-        # A query opens a transaction whether or not one is asked for, so
-        # reading the user outside a block here would leave one open, and the
-        # ``transaction`` helper would then join it rather than start its own
-        # -- and join means "the caller commits", which nothing here would do.
-        # The tokens would be written and silently rolled back at the end of
-        # the request.
-        #
-        # And argon2 spends tens of milliseconds of CPU on purpose. Verifying
-        # inside a transaction would hold a connection for the whole of it,
-        # under every concurrent login at once.
+        # The lookup runs in its own transaction, closed before the hash is
+        # verified. Otherwise the implicit transaction of the query would be
+        # joined and never committed, and argon2 would hold a connection.
         async with transaction(self._session):
             user = await self._find_user(email)
 
@@ -303,16 +275,9 @@ class RefreshTokenPair:
     ) -> TokenPair:
         """Exchange a live refresh token for a new pair in the same family.
 
-        Everything -- the lookup, the reuse check, the revocation and the new
-        row -- happens inside one transaction with the old row locked. Splitting
-        it would let two concurrent requests each walk away with a valid pair,
-        and then reuse detection would be detecting nothing.
-
-        **The refusal is raised after that transaction commits, never inside
-        it.** A rejected refresh is not always a no-op: reuse revokes the whole
-        family, and a deactivated account closes its sessions. Raising inside
-        the block would roll back exactly the revocation the rejection exists
-        to perform, and the stolen token would go on working.
+        The lookup, reuse check, revocation and new row happen in one
+        transaction with the old row locked. A refusal is raised only after
+        that transaction commits, so a family revoked on reuse stays revoked.
         """
         rotated_at = now or datetime.now(UTC)
         token_hash = hash_refresh_token(refresh_token)
@@ -344,12 +309,10 @@ class RefreshTokenPair:
         rotated_at: datetime,
         context: SessionContext,
     ) -> TokenPair | None:
-        """Mint the successor of a live token, or refuse and say nothing.
+        """Issue the successor of a live token, or return ``None`` to refuse.
 
-        Returns ``None`` for every refusal rather than raising, so that the
-        writes a refusal makes -- revoking a family, closing the sessions of a
-        deactivated account -- are committed by the caller's transaction
-        instead of being rolled back by the exception.
+        Returning instead of raising lets the revocations a refusal performs be
+        committed by the caller's transaction.
         """
         if is_refresh_token_reused(revoked_at=stored.revoked_at):
             await self._kill_family(token=stored, revoked_at=rotated_at)
@@ -388,16 +351,7 @@ class RefreshTokenPair:
     async def _kill_family(self, *, token: RefreshToken, revoked_at: datetime) -> None:
         """Revoke every live token of the family a reused token belongs to.
 
-        This is the security-relevant branch of the whole service. A token that
-        was already exchanged has arrived a second time, which means two
-        parties hold it: the legitimate client and whoever took a copy. There
-        is no way to tell which of the two is calling now, so both lose the
-        session -- including the pair issued to the honest one moments ago.
-
-        Logged at ``WARNING`` and not ``ERROR``: the system handled it exactly
-        as designed and no human has to get out of bed, but this is the record
-        an alert on token theft is built from. No token and no hash goes into
-        it, only the identifiers needed to find the family again.
+        Logged at ``WARNING`` with identifiers only, never a token or a hash.
         """
         ended = await self._tokens.revoke_family(family_id=token.family_id, revoked_at=revoked_at)
         _logger.warning(
@@ -409,7 +363,7 @@ class RefreshTokenPair:
 
 
 class RevokeSessions:
-    """End a session, or every session of a user (T1.8)."""
+    """End a session, or every session of a user."""
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
@@ -424,14 +378,8 @@ class RevokeSessions:
     ) -> None:
         """Revoke the family behind this token, or all families of its owner.
 
-        An unknown token is not an error. Logging out is meant to be safe to
-        repeat -- a client retrying after a timeout, a second tab, a token that
-        already expired -- and answering differently for a token that exists
-        would make the endpoint a way to test whether one does.
-
-        Presenting an already revoked token here is not reuse and does not kill
-        anything extra: revoking a session twice is what a retry looks like,
-        and only :class:`RefreshTokenPair` treats a spent token as theft.
+        An unknown or already revoked token is not an error and not treated as
+        reuse, so logout is safe to repeat.
         """
         revoked_at = now or datetime.now(UTC)
 

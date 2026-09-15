@@ -1,13 +1,8 @@
-"""What the scenarios need from a signing key, and nothing more.
+"""The signing key port used by the scenarios.
 
-The domain does not know RSA, PEM or PyJWT. It knows that something can turn a
-set of claims into a signed string, that the something has a ``kid`` naming it,
-and that its public half can be published. The implementation is an adapter
-(docs/CODING_STANDARDS.md sections 2.2 and 4).
-
-The port has no ``verify``. Verification of an access token happens in the
-service that receives it, against the public key it fetched from JWKS -- never
-here (ADR-0010). ``auth`` only signs.
+A signer turns claims into a signed string, is named by a ``kid``, and exposes
+its public key for JWKS. There is no ``verify``: tokens are verified by the
+services that receive them.
 """
 
 from __future__ import annotations
@@ -16,10 +11,7 @@ from typing import Protocol, runtime_checkable
 
 __all__ = ["PublicJwk", "TokenSigner"]
 
-# One entry of the ``keys`` array of a JWKS document, already in the shape RFC
-# 7517 gives it: a mapping of string to string. Typed as a plain dict because
-# nothing in the domain inspects the members -- the repository stores the PEM
-# and the endpoint serialises the mapping.
+# One entry of the ``keys`` array of a JWKS document, as defined by RFC 7517.
 PublicJwk = dict[str, str]
 
 

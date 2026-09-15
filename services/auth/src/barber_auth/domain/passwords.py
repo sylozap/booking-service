@@ -1,14 +1,8 @@
 """The password policy and the port a hasher has to satisfy.
 
-The policy is a pure function: it decides whether a password may be accepted
-and says nothing about how it is stored. The storage is behind
-:class:`PasswordHasher`, a protocol -- the domain must not depend on argon2,
-and a scenario must not be able to reach around the port and store a password
-in any other form (docs/CODING_STANDARDS.md sections 2.2 and 4).
-
-The password never leaves this module in a message, a log record or an
-exception: :class:`~barber_auth.domain.errors.WeakPassword` names the rule that
-failed, not the value that failed it.
+The policy is a pure function that decides whether a password is acceptable.
+Storage is behind the :class:`PasswordHasher` protocol. The password value never
+appears in a message, a log record or an exception.
 """
 
 from __future__ import annotations

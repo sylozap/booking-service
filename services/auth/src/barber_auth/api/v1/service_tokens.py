@@ -1,15 +1,8 @@
 """``POST /internal/v1/token``.
 
-**The path is not under ``/api/v1`` and this module is under ``api/v1``.**
-Internal endpoints are not part of the public contract and are not published
-through the gateway (docs/04-api-contracts.md); the module sits with the other
-routers because that is where the API of this service is assembled, and the
-router is mounted at ``/internal/v1`` rather than behind the public prefix.
-
-The endpoint is anonymous in the sense that it demands no token -- the client
-credentials in the body *are* the credentials being checked. It is the one
-place a service proves who it is, and everything it can reach afterwards is
-closed with ``require_service_token``.
+Internal endpoint, mounted at ``/internal/v1`` and not published through the
+gateway. It requires no token: the client credentials in the body are what is
+checked.
 """
 
 from __future__ import annotations
@@ -35,18 +28,11 @@ async def issue_service_token(
 ) -> ServiceTokenResponse:
     """Get a token for calls between services.
 
-    **An unknown client and a wrong secret answer identically**, with `401` and
-    the same body, and take comparable time to do it: otherwise the endpoint
-    lists the services of the platform to anyone who asks. A client an operator
-    switched off answers the same way.
+    An unknown client, a wrong secret and a deactivated client all answer `401`
+    with the same body.
 
-    The token carries `scopes` and no `roles`, and its `typ` is `service`. That
-    claim is what lets an endpoint under `/internal` refuse a customer's token
-    by reading one field rather than guessing from the shape of the subject --
-    including a customer who happens to be a `super_admin`.
-
-    It is short lived and there is no refresh: the client holds its credentials
-    permanently and asks again.
+    The token carries `scopes`, no `roles`, and `typ` `service`. It is short
+    lived and cannot be refreshed; the client requests a new one.
     """
     issued = await scenario.execute(
         client_id=body.client_id,

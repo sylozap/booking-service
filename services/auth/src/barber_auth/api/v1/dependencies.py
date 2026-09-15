@@ -1,9 +1,7 @@
 """Assembling the scenarios a request needs.
 
-A scenario takes its dependencies through the constructor, so it can be built
-in a test without an application behind it. This module is where the ones a
-request has -- its session, the hasher and the mailer of the running service --
-are put together (docs/CODING_STANDARDS.md section 7).
+Builds each scenario from the session, hasher and mailer of the running
+service.
 """
 
 from __future__ import annotations
@@ -71,7 +69,7 @@ def get_password_hasher(request: Request) -> PasswordHasher:
 
 
 def get_mailer(request: Request) -> DevMailer:
-    """The development mailer standing in for ``notification`` until T5.4."""
+    """The development mailer that writes confirmation letters to a log."""
     mailer = request.app.state.mailer
     if not isinstance(mailer, DevMailer):  # pragma: no cover - set by create_application
         raise RuntimeError("application state has no mailer")

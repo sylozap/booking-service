@@ -1,21 +1,9 @@
-"""The stand-in for an email provider, until ``notification`` takes over.
+"""Development mailer that writes confirmation letters to a log.
 
-T1.4 needs the confirmation link to reach a developer, and the service that
-sends letters does not exist before T5.4. So the letter is written to the log
-of its own channel and the flow can be exercised end to end.
-
-**About the token in the output.** docs/CODING_STANDARDS.md section 11 forbids
-one-time confirmation tokens in the logs, and that rule is about the service
-log -- the records that go to Loki and are read by everyone with access to it.
-What this class writes is the letter itself: it is the delivery channel, the
-same bytes an SMTP server would carry, and the link is the entire content. The
-distinction is kept visible by a logger of its own, ``barber_auth.mail``, and
-by :meth:`is_enabled`: outside ``local`` and ``test`` the mailer refuses to
-print anything, so a production deployment cannot leak a token through it even
-if it is left wired in by mistake.
-
-From T5.4 ``auth`` only publishes ``user.email_confirmation_requested`` and
-this module is deleted.
+The letter, including its one-time link, is written by a dedicated logger,
+``barber_auth.mail``, separate from the service log. :meth:`is_enabled` limits
+it to the ``local`` and ``test`` environments, so it never prints a token
+anywhere else.
 """
 
 from __future__ import annotations

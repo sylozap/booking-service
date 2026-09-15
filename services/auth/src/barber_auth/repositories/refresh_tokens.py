@@ -50,17 +50,11 @@ class RefreshTokenRepository:
         return token
 
     async def lock_by_token_hash(self, token_hash: str) -> RefreshToken | None:
-        """Find a token and hold its row until the transaction ends.
+        """Find a token and lock its row until the transaction ends.
 
-        ``FOR UPDATE`` is the whole of the concurrency control of the rotation.
-        Two requests arriving with the same token would otherwise both read it
-        as usable and both issue a pair, which is exactly the outcome the
-        family mechanism exists to prevent. With the lock, the second one waits
-        for the first to commit and then reads the row as revoked -- which is
-        reuse, and kills the family (T1.7).
-
-        The row is returned whether or not it is still usable: revoked, expired
-        and live are rules, and the rules are decided in the domain.
+        ``FOR UPDATE`` serialises concurrent rotations of the same token: the
+        second request reads the row as revoked, which is reuse. The row is
+        returned whatever its state; the domain decides whether it is usable.
         """
         statement = (
             select(RefreshToken).where(RefreshToken.token_hash == token_hash).with_for_update()
@@ -83,10 +77,8 @@ class RefreshTokenRepository:
     ) -> None:
         """Retire a token in favour of the one that succeeds it.
 
-        The row is kept rather than deleted. It is what turns a second use of
-        the same token into detectable reuse instead of an unknown token, and
-        ``replaced_by`` is what lets an incident be read forward through a
-        family.
+        The row is kept, so a second use is detected as reuse, and
+        ``replaced_by`` links it to its successor.
         """
         token.revoked_at = revoked_at
         token.replaced_by = replaced_by

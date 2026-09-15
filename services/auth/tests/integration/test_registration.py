@@ -67,8 +67,7 @@ async def test_a_transaction_that_rolls_back_leaves_no_event_behind(
             await register.execute(email=EMAIL, phone=PHONE, password=PASSWORD)
             raise RegistrationInterrupted
 
-    # The whole point of the outbox: an event never survives the state change
-    # that caused it (ADR-0004).
+    # An event never outlives the state change that caused it.
     assert await count_of(session, OutboxMessage) == 0
     assert await count_of(session, User) == 0
     assert await count_of(session, EmailConfirmation) == 0

@@ -1,8 +1,4 @@
-"""The versioned API of the auth service.
-
-The prefix lives here so every endpoint inherits the same path
-(docs/CODING_STANDARDS.md section 9).
-"""
+"""The versioned API of the auth service."""
 
 from __future__ import annotations
 

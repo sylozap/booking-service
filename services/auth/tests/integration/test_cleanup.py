@@ -110,9 +110,8 @@ async def test_a_revoked_token_that_has_not_expired_is_kept(
 
     await worker.run_once(now=NOW)
 
-    # This row is the whole of theft detection: presenting its token again is
-    # reuse, and reuse revokes the family (T1.7). Deleting it early turns a
-    # stolen token into an unknown one.
+    # A revoked but unexpired token must survive, so presenting it again is
+    # still detected as reuse.
     assert len((await session.execute(select(RefreshToken))).scalars().all()) == 1
 
 
@@ -184,8 +183,8 @@ async def test_an_old_deduplication_row_is_removed(
 
     summary = await worker.run_once(now=NOW)
 
-    # Kafka will not redeliver a message a week later, so past that the row
-    # protects nothing (ADR-0007).
+    # Kafka does not redeliver a message a week later, so the row is no longer
+    # needed.
     assert summary.processed_events == 1
 
 

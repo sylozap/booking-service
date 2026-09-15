@@ -109,8 +109,8 @@ async def test_the_access_token_carries_the_roles_with_their_salon(
     async with app_client(app) as client:
         response = await client.post(LOGIN, json=credentials())
 
-    # A service reading this token has to be able to answer "admin of which
-    # salon" without asking auth (docs/04-api-contracts.md).
+    # A service reading this token can tell which salon the admin role applies
+    # to without asking auth.
     assert claims_of(response.json()["access_token"], signer)["roles"] == [
         {"role": "client", "salon_id": None},
         {"role": "salon_admin", "salon_id": str(salon_id)},

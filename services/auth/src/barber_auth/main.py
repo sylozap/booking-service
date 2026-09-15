@@ -62,10 +62,8 @@ def create_application(settings: AuthSettings | None = None) -> FastAPI:
                 clients=resolved.service_clients,
             ).execute()
 
-        # auth verifies the tokens it issued itself, against signing_keys
-        # rather than against its own JWKS endpoint: it holds the keys already,
-        # and a service that calls itself over HTTP depends on its own
-        # readiness in order to become ready.
+        # auth verifies its own tokens against signing_keys directly rather
+        # than calling its own JWKS endpoint.
         use_authentication(
             app,
             TokenVerifier(
@@ -90,9 +88,9 @@ def create_application(settings: AuthSettings | None = None) -> FastAPI:
         )
 
         async with AsyncExitStack() as stack:
-            # The producer is deliberately not started here. The relay connects
-            # on its first pass, so a broker that is down delays the events
-            # instead of stopping the service (docs/08-consistency.md).
+            # The producer is not started here: the relay connects on its first
+            # pass, so a broker that is down delays events instead of stopping
+            # the service.
             stack.push_async_callback(producer.stop)
             await stack.enter_async_context(relay.run_in_background())
             await stack.enter_async_context(cleanup.run_in_background())
@@ -114,16 +112,9 @@ def create_application(settings: AuthSettings | None = None) -> FastAPI:
 def install_dependencies(app: FastAPI, settings: AuthSettings) -> None:
     """Put the singletons of the service where the routers look for them.
 
-    Built here rather than in the lifespan: none of them needs a connection,
-    and a test that assembles the application without starting it still gets a
-    working registration. The argon2 hasher is expensive to construct -- it
-    builds the hash it verifies against when there is no user -- and there is
-    one of it per process for that reason.
-
-    The signer is built here too, which means a private key that cannot be read
-    or is not RSA stops the process at assembly rather than at the first login.
-    Reading it is the only moment the key material is handled; from then on it
-    lives inside the signer.
+    Built at assembly rather than in the lifespan, so an application that is
+    never started still works in tests, and an unreadable private key stops the
+    process immediately.
     """
     app.state.password_hasher = Argon2Hasher(settings)
     app.state.signer = RsaTokenSigner(settings.signing_key_pem())

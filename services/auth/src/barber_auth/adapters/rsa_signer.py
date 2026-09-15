@@ -1,20 +1,10 @@
 """The RS256 signing key of the service, behind the domain port.
 
-This is the one module that knows about PEM, RSA and PyJWT. Everything above it
-sees :class:`~barber_auth.domain.signing.TokenSigner`: a thing with a ``kid``
-that turns claims into a string.
+The only module that knows about PEM, RSA and PyJWT. The private key comes from
+the environment and stays in memory; the database holds only public keys.
 
-**The private key is never stored in the database and never leaves this
-object.** ``signing_keys`` holds public halves; the private one arrives from
-the environment -- a mounted Kubernetes Secret in the cluster, a variable in
-compose -- and stays in memory (ADR-0008).
-
-**The ``kid`` is derived, not assigned.** It is the RFC 7638 thumbprint of the
-public JWK: the SHA-256 of a canonical JSON object with exactly the required
-members, in lexicographic order, no whitespace. Deriving it means the same key
-always has the same name, so a pod restart re-registers the row it already
-owns instead of adding a second one, and an operator can compute the ``kid`` of
-a key file without asking the service.
+The ``kid`` is the RFC 7638 thumbprint of the public JWK, so the same key always
+has the same name and a restarted pod re-registers its existing row.
 """
 
 from __future__ import annotations
@@ -41,9 +31,7 @@ MIN_KEY_SIZE_BITS = 2048
 class InvalidSigningKey(ValueError):
     """The configured key is not an RSA private key this service can sign with.
 
-    Not a ``DomainError``: nobody sends a request that causes it. It is a
-    misconfiguration, it happens at startup, and the process should stop
-    (docs/CODING_STANDARDS.md section 12).
+    A startup misconfiguration, not a ``DomainError``.
     """
 
 
@@ -70,13 +58,7 @@ class RsaTokenSigner:
         ).decode("ascii")
 
     def sign(self, claims: dict[str, object]) -> str:
-        """Sign the claims, naming the key in the header.
-
-        ``kid`` goes into the JOSE header and not into the payload, which is
-        where RFC 7515 puts it and where every verifier looks for it: a
-        consumer has to choose the key before it can check the signature, so
-        the name cannot live inside the part being checked.
-        """
+        """Sign the claims, naming the key in the ``kid`` of the JOSE header."""
         return jwt.encode(
             claims,
             self._private_key,
@@ -133,10 +115,8 @@ def _load_private_key(private_key_pem: str) -> RSAPrivateKey:
 def _public_jwk(public_key: RSAPublicKey) -> PublicJwk:
     """The three members RFC 7638 hashes for an RSA key: ``e``, ``kty``, ``n``.
 
-    Returned in that order because the thumbprint is taken over the members
-    sorted lexicographically, and building the mapping in the right order makes
-    the canonical form a plain ``json.dumps`` instead of a second sort nobody
-    can see the reason for.
+    Returned in lexicographic order, so the canonical form is a plain
+    ``json.dumps``.
     """
     numbers = public_key.public_numbers()
     return {

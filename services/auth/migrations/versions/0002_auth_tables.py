@@ -1,23 +1,11 @@
 """auth tables: users, roles, tokens, signing keys and service clients
 
-The whole schema of the auth database in one revision. It is one logical
-change -- "auth owns accounts and their credentials" -- and the tables of
-stages T1.5 to T1.10 are created here as well: splitting them across five
-revisions would make every one of them a migration nobody can apply alone.
+The whole schema of the auth database in one revision.
 
-Two shapes deserve a word.
-
-``users`` is unique on ``lower(email)`` rather than on ``email``: the same
-address in two cases is one person, and a plain unique constraint would let
-them register twice. The column stores the normalised value anyway; the
-functional index is the guarantee that survives a write path that forgets to.
-
-``user_roles`` carries a surrogate key. docs/05-data-model.md describes it as
-``PK(user_id, role, salon_id)``, and PostgreSQL does not allow a null inside a
-primary key, while a global role has no salon. The identity is therefore two
-partial unique indexes -- one over the global grants, one over the scoped ones
--- which forbids the same grant twice and still lets a user be a global
-``master`` and the ``salon_admin`` of one salon at the same time.
+``users`` is unique on ``lower(email)``, so the same address in a different
+case cannot register twice. ``user_roles`` has a surrogate key and two partial
+unique indexes, one for global grants and one for salon-scoped grants, because
+a primary key cannot contain the null ``salon_id`` of a global role.
 
 Revision ID: 0002_auth_tables
 Revises: 0001_shared_tables

@@ -92,8 +92,8 @@ async def test_logging_out_everywhere_revokes_the_rows_rather_than_deleting_them
         await client.post(LOGOUT, json={"refresh_token": phone, "all_devices": True})
 
     tokens = (await session.execute(select(RefreshToken))).scalars().all()
-    # Kept, so a later presentation is detectable reuse rather than an unknown
-    # token, and so the cleanup of T1.12 has something to prune.
+    # Kept, so a later presentation is detected as reuse rather than an unknown
+    # token.
     assert len(tokens) == 2
     assert all(token.revoked_at is not None for token in tokens)
 
@@ -158,7 +158,5 @@ async def test_the_logout_is_documented_in_the_openapi_contract(app: FastAPI) ->
 
     operation = document["paths"]["/api/v1/auth/logout"]["post"]
     assert "204" in operation["responses"]
-    # The access token outliving the logout is a property of the design, not an
-    # oversight, and it is written where a client integrating against the API
-    # will read it (ADR-0010).
+    # Access tokens outlive the logout, and the endpoint description says so.
     assert "expire" in operation["description"].lower()

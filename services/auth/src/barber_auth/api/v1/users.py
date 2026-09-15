@@ -1,15 +1,8 @@
 """Managing the roles of a user.
 
-Both endpoints are closed to everyone but the two roles that may hand roles
-out, and the finer rule -- which salon -- is checked by the scenario, because
-only it knows which salon the request is about.
-
-**A granted role does not appear in a token that already exists.** Access
-tokens are verified without asking anyone (ADR-0010), so what a token says
-about its holder stays true until it expires; the new role reaches the user on
-their next refresh, within fifteen minutes. It is stated in the description of
-the endpoint below because a client integrating against this API will otherwise
-grant a role, retry immediately, and conclude the grant failed.
+Both endpoints are limited to the roles that may grant roles; the salon scope
+is checked by the scenario. A change reaches the user's access token on their
+next refresh.
 """
 
 from __future__ import annotations
@@ -52,24 +45,12 @@ async def grant_role(
 ) -> RoleGrantResponse:
     """Give a user a role.
 
-    A `super_admin` grants anything. A `salon_admin` grants `master`, and only
-    inside a salon they administer -- **not** another `salon_admin`, not even
-    in their own salon: handing over a salon is a decision for whoever granted
-    it in the first place.
+    A `super_admin` grants any role. A `salon_admin` grants `master`, and only
+    in a salon they administer. `client` cannot be granted and answers `422`.
 
-    `client` cannot be granted here at all and answers `422`: it arrives with
-    registration, and a second source for it is a second way for the two to
-    disagree. That is not a permissions problem, which is why it is not a
-    `403` even for a caller who has no permissions either.
-
-    **The new role does not appear in access tokens the user already holds.**
-    It reaches them on their next `refresh`, and so within fifteen minutes.
-    That is a consequence of verifying tokens without asking anyone
-    ([ADR-0010](docs/adr/0010-jwt-verified-in-services.md)), not an oversight.
-
-    Granting a role the user already holds answers `201` again rather than a
-    conflict: the requested state is the state that exists, and a retried
-    request should not look like a failure.
+    The new role appears in the user's access token after their next
+    `refresh`, within fifteen minutes. Granting a role the user already holds
+    answers `201` again.
     """
     granted = await scenario.execute(
         caller=caller,
@@ -101,12 +82,9 @@ async def revoke_role(
 ) -> None:
     """Remove a grant.
 
-    Whoever may hand a role out may take it back, and nobody else: without that
-    symmetry a `salon_admin` could appoint a master they then could not remove.
-
-    **Revoking does not invalidate the tokens the user is holding.** The role
-    disappears from their next access token, within fifteen minutes. Ending a
-    session immediately is what `POST /api/v1/auth/logout` is for.
+    Allowed to whoever may grant the role. The role disappears from the user's
+    next access token, within fifteen minutes; `POST /api/v1/auth/logout` ends
+    a session immediately.
     """
     await scenario.execute(
         caller=caller,

@@ -1,14 +1,8 @@
-"""Registering the signing key and publishing the public ones.
+"""Registering the signing key and publishing the public keys.
 
-Two scenarios that share a table and nothing else.
-
-:class:`RegisterSigningKey` runs once, at startup: the process holds a private
-key and the rest of the platform has to be able to find its public half.
-
-:class:`PublishedKeys` runs on every JWKS request and answers with everything
-currently active -- which during a rotation is two keys, and that is the point.
-Tokens signed by the outgoing key keep verifying until they expire, so the
-switch does not log the whole platform out (ADR-0010).
+:class:`RegisterSigningKey` runs once at startup and stores the public key of
+this process. :class:`PublishedKeys` answers JWKS requests with every active
+key, which during a rotation is two.
 """
 
 from __future__ import annotations
@@ -36,15 +30,11 @@ class JsonWebKeySet:
 
 
 class RegisterSigningKey:
-    """Announce the public half of the key this process signs with.
+    """Store the public key this process signs with.
 
-    Called from the lifespan before the first request is served: a token whose
-    ``kid`` is not in JWKS is a token no service can verify, so the key has to
-    be published before it is used.
-
-    Idempotent by construction -- the ``kid`` is derived from the key material,
-    so a restart, a second replica and a rolling deploy all register the same
-    row and the second write does nothing.
+    Called from the lifespan before the first request is served. Idempotent:
+    the ``kid`` is derived from the key, so every replica registers the same
+    row.
     """
 
     def __init__(self, *, session: AsyncSession, signer: TokenSigner) -> None:
@@ -73,13 +63,7 @@ class PublishedKeys:
         self._keys = SigningKeyRepository(session)
 
     async def execute(self) -> JsonWebKeySet:
-        """Every active key as a JWK.
-
-        The conversion from the stored PEM happens here rather than at write
-        time: the table keeps one representation of a key, so there is no
-        second one to drift out of step with it, and the modulus and exponent
-        JWKS publishes are read out of the key itself on every request.
-        """
+        """Every active key as a JWK, converted from the stored PEM."""
         keys = await self._keys.list_active()
         return JsonWebKeySet(
             keys=tuple(public_jwk_of_pem(key.public_pem, kid=key.kid) for key in keys)

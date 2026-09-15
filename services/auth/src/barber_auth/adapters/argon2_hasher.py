@@ -1,13 +1,8 @@
 """argon2id behind the password port.
 
-The parameters come from the settings rather than from the defaults of the
-library: the cost of a hash is an operational decision that changes with the
-hardware, and it has to be visible next to the other tuning of the service.
-
-Every stored hash carries the parameters it was made with, so raising the cost
-does not invalidate what is already in the database -- an old hash still
-verifies, and ``needs_rehash`` says when to replace it during a successful
-login (T1.6).
+The parameters come from the settings. Every stored hash carries the parameters
+it was made with, so raising the cost keeps old hashes verifiable, and
+``needs_rehash`` tells when to replace one after a successful login.
 """
 
 from __future__ import annotations

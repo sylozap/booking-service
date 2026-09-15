@@ -86,8 +86,8 @@ async def test_uniqueness_of_the_address_is_an_index_over_lower_email(
 async def test_a_role_is_unique_within_its_scope(dsn: str, migrations_engine: AsyncEngine) -> None:
     await upgrade(dsn)
 
-    # Two partial indexes instead of a primary key: a global role has no salon,
-    # and a null cannot sit inside a primary key (docs/05-data-model.md).
+    # Two partial indexes instead of a primary key, because a global role has a
+    # null salon_id.
     assert {
         "uq_user_roles_user_id_role_global",
         "uq_user_roles_user_id_role_salon_id",

@@ -1,8 +1,6 @@
 """shared tables: outbox and processed_events
 
-The reusable revision of T0.14. The DDL lives in the chassis, so the auth
-database gets exactly the same two tables as every other database that
-publishes or consumes events.
+Creates the shared tables from the DDL in the chassis.
 
 Revision ID: 0001_shared_tables
 Revises:

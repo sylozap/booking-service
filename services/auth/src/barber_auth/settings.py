@@ -25,9 +25,7 @@ ALEMBIC_INI = Path(__file__).resolve().parents[2] / "alembic.ini"
 class ServiceClientConfig(BaseModel):
     """One machine-to-machine client, as the environment describes it.
 
-    The secret lives in a Kubernetes Secret and reaches the database only as a
-    hash, exactly like a password. ``SecretStr`` is what keeps it out of a log
-    line that dumps the settings (docs/CODING_STANDARDS.md section 12).
+    The secret is a ``SecretStr`` and reaches the database only as a hash.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -44,11 +42,8 @@ class AuthSettings(BaseAppSettings):
     service_name: str = "auth"
 
     # --- passwords ---------------------------------------------------------
-    # The cost of one hash. Defaults follow the "second recommended option" of
-    # RFC 9106: 64 MiB and three passes, which is the memory-hard side of the
-    # trade-off a request path can still afford. Raising them later does not
-    # invalidate the stored hashes -- each one carries the parameters it was
-    # made with.
+    # argon2 cost. Defaults follow the second recommended option of RFC 9106:
+    # 64 MiB and three passes. Stored hashes keep their own parameters.
     password_argon2_time_cost: int = 3
     password_argon2_memory_kib: int = 65536
     password_argon2_parallelism: int = 4
@@ -57,18 +52,15 @@ class AuthSettings(BaseAppSettings):
     password_min_length: int = 10
 
     # --- email confirmation ------------------------------------------------
-    # docs/IMPLEMENTATION_PLAN.md T1.4: the link is valid for a day.
+    # The confirmation link is valid for a day.
     email_confirmation_ttl_hours: int = 24
     # Where the link in the letter points. The frontend page that reads the
     # token out of the query string and posts it to /api/v1/auth/confirm-email.
     email_confirmation_url: str = "http://localhost:8080/confirm-email"
 
     # --- signing keys ------------------------------------------------------
-    # The RS256 private key the access tokens are signed with. It arrives one
-    # of two ways and never through both: a path, which is how a Kubernetes
-    # Secret is mounted, or the PEM itself, which is what compose and a local
-    # .env can carry. Neither has a default -- a service that invents its own
-    # signing key issues tokens nobody else can verify.
+    # The RS256 private key, given either as a file path (a mounted Kubernetes
+    # Secret) or as the PEM itself, never both. There is no default.
     jwt_private_key_path: Path | None = None
     jwt_private_key: SecretStr | None = None
 
@@ -76,16 +68,15 @@ class AuthSettings(BaseAppSettings):
     # service checks it, so one setting has to be readable from both sides.
 
     # --- token lifetimes ---------------------------------------------------
-    # Fifteen minutes is what makes a token that cannot be revoked acceptable
-    # (ADR-0010); thirty days is how long a session survives without a login.
+    # Access tokens cannot be revoked, so they are short lived; a refresh token
+    # keeps a session for thirty days.
     access_token_ttl_minutes: int = ACCESS_TOKEN_TTL_MINUTES
     refresh_token_ttl_days: int = REFRESH_TOKEN_TTL_DAYS
     service_token_ttl_minutes: int = SERVICE_TOKEN_TTL_MINUTES
 
     # --- background cleanup ------------------------------------------------
-    # How long a row stays after it stopped meaning anything. Not zero, so that
-    # an incident a few days old can still be read; the window is what the
-    # cleanup adds on top of the expiry, never a substitute for it.
+    # How long a row is kept after it expires, so recent incidents can still be
+    # investigated.
     cleanup_interval_seconds: float = 3600.0
     cleanup_batch_size: int = 1000
     cleanup_token_retention_days: int = 7
@@ -93,13 +84,9 @@ class AuthSettings(BaseAppSettings):
     cleanup_processed_event_retention_days: int = 7
 
     # --- machine to machine clients ----------------------------------------
-    # Registered at startup from here, the same way the signing key is loaded:
-    # a client seeded by a migration would put its secret hash in git and make
-    # rotating it a schema change. Given as JSON, for example
+    # Registered at startup. Given as JSON, for example
     # {"booking": {"secret": "...", "scopes": ["catalog:read"]}}
-    #
-    # Empty by default. A deployment with no internal callers is a valid one,
-    # and the endpoint simply refuses everything.
+    # Empty by default, in which case the token endpoint refuses everything.
     service_clients: dict[str, ServiceClientConfig] = {}
 
     @field_validator("jwt_private_key_path", "jwt_private_key", mode="before")
@@ -107,10 +94,7 @@ class AuthSettings(BaseAppSettings):
     def _blank_is_unset(cls, value: object) -> object:
         """Treat an empty variable as an absent one.
 
-        ``.env.example`` lists every variable, including the ones a given
-        deployment leaves empty, and an empty string is what pydantic would
-        otherwise turn into ``Path("")``. Without this the file cannot be
-        copied and edited, because both key sources would look set at once.
+        Lets ``.env.example`` list both key sources with one of them left empty.
         """
         if isinstance(value, str) and not value.strip():
             return None
@@ -139,17 +123,10 @@ class AuthSettings(BaseAppSettings):
     def signing_key_pem(self) -> str:
         """The private key, read from wherever this deployment keeps it.
 
-        A method and not a field: the file is read when the signer is built, so
-        a rotation that replaces the mounted Secret takes effect on the next
-        restart rather than being frozen into the settings object at import
-        time. The value is returned and immediately handed to the signer; it is
-        never logged, never put back into the settings and never stored.
+        Read when the signer is built, never stored in the settings or logged.
         """
         if self.jwt_private_key is not None:
-            # A PEM is several lines and an environment variable is one, so the
-            # inline form carries backslash-n and is unescaped here. A value
-            # that already has real newlines -- a here-document in compose, a
-            # multi-line .env entry -- passes through untouched.
+            # An inline PEM carries escaped newlines, which are restored here.
             return self.jwt_private_key.get_secret_value().replace("\\n", "\n")
 
         # Guaranteed by the validator above, restated for mypy and for anyone

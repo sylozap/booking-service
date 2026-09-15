@@ -57,6 +57,6 @@ class EmailConfirmationRepository:
         confirmation: EmailConfirmation,
         used_at: datetime,
     ) -> None:
-        """Spend the token. The row stays for the cleanup of T1.12 to prune."""
+        """Spend the token. The row stays until the cleanup worker prunes it."""
         confirmation.used_at = used_at
         await self._session.flush()

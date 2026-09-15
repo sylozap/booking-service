@@ -12,16 +12,11 @@ __all__ = ["RoleGrantRequest", "RoleGrantResponse", "RoleRevokeRequest"]
 
 
 class RoleGrantRequest(BaseModel):
-    """The role to hand out, and the salon it applies to.
+    """The role to grant, and the salon it applies to.
 
-    ``salon_id`` is required for ``salon_admin`` and meaningful for ``master``;
-    a ``master`` granted without one is a master everywhere, which only a
-    ``super_admin`` may mean.
-
-    The enum admits ``client`` so that OpenAPI documents the whole set of roles
-    the platform has; the scenario is what answers that this one is not handed
-    out here. Splitting the vocabulary in two would leave a reader of the
-    contract guessing why one member is missing.
+    ``salon_id`` is required for ``salon_admin`` and optional for ``master``,
+    where omitting it makes a global grant. ``client`` is listed so OpenAPI
+    shows every role, but it cannot be granted.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -31,13 +26,7 @@ class RoleGrantRequest(BaseModel):
 
 
 class RoleRevokeRequest(BaseModel):
-    """Which grant to take away.
-
-    The role and the salon rather than an identifier of the grant: a global
-    role and a role scoped to a salon are different grants of the same name,
-    and the surrogate key that distinguishes them in the table is not something
-    the API hands out (docs/CODING_STANDARDS.md section 9).
-    """
+    """Which grant to take away, identified by role and salon."""
 
     model_config = ConfigDict(extra="forbid")
 

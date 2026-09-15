@@ -62,8 +62,7 @@ async def test_a_rotation_leaves_both_keys_active(
     await RegisterSigningKey(session=session, signer=incoming).execute()
 
     published = await PublishedKeys(session).execute()
-    # The tokens signed a minute ago keep verifying while the new ones are
-    # issued -- the transitional period ADR-0010 requires.
+    # Tokens signed with the old key keep verifying while new ones are issued.
     assert {key["kid"] for key in published.keys} == {signer.kid, incoming.kid}
 
 

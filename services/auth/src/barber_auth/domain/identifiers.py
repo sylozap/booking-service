@@ -1,8 +1,7 @@
 """Identifiers of the service, distinct at the type level.
 
-Everything in this system is a UUID, and a signature that takes three of them
-accepts them in any order. ``NewType`` costs nothing at runtime and makes mypy
-refuse the transposition (docs/CODING_STANDARDS.md section 4).
+``NewType`` wrappers over UUID, so mypy rejects identifiers passed in the wrong
+order.
 """
 
 from __future__ import annotations

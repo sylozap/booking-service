@@ -91,8 +91,8 @@ async def test_both_keys_are_served_during_a_rotation(
     async with app_client(app) as client:
         response = await client.get(JWKS)
 
-    # This is what makes a rotation invisible to the tokens issued a minute
-    # before it: both keys are published until the old ones expire (ADR-0010).
+    # Both keys are published until the old tokens expire, so a rotation does
+    # not break tokens issued just before it.
     assert {key["kid"] for key in response.json()["keys"]} == {
         registered_signing_key,
         outgoing.kid,

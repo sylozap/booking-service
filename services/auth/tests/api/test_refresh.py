@@ -220,8 +220,7 @@ async def test_the_rotation_is_documented_in_the_openapi_contract(app: FastAPI) 
 async def _expired_token(session: AsyncSession, make_user: UserFactory, email: str = EMAIL) -> str:
     """A refresh token whose row is already past its expiry.
 
-    Built by moving the row rather than by waiting: docs/CODING_STANDARDS.md
-    section 14 forbids sleeping in a test, and thirty days is a long sleep.
+    Built by moving the row back in time rather than by waiting.
     """
     user = await make_user(email=email, phone=f"+7999123{hash(email) % 10000:04d}")
     token = "expired-" + "y" * 40

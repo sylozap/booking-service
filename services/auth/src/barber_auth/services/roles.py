@@ -1,19 +1,8 @@
 """Granting and revoking roles.
 
-Two rules, and they are the whole scenario.
-
-**Who may grant what.** A ``super_admin`` grants anything. A ``salon_admin``
-grants ``master``, and only inside a salon they administer. Nothing else is
-allowed, and ``client`` is not grantable at all: it comes with registration,
-and a second way to hand it out is a second way for the two to disagree.
-
-**When the grant takes effect.** Not immediately. An access token is verified
-without asking anyone (ADR-0010), so the roles inside one stay as they were
-until it expires; the new role reaches the user on their next refresh, within
-fifteen minutes. That is a property of the design, it is written into the
-OpenAPI description of the endpoint, and it is why this scenario publishes no
-event -- there is no consumer, and an event saying "the role changed" would
-promise a promptness the tokens do not have.
+A ``super_admin`` grants any role. A ``salon_admin`` grants ``master``, and only
+in a salon they administer. ``client`` is never granted here. A change reaches
+the user's access token on their next refresh, and no event is published.
 """
 
 from __future__ import annotations
@@ -67,10 +56,8 @@ class GrantRole:
         salon_id: SalonId | None = None,
     ) -> GrantedRole:
         """Grant one role to one user."""
-        # Grantability first, authorisation second. "client is not handed out
-        # here" is a static fact about the API, published in OpenAPI, so
-        # answering it before the role check reveals nothing and spares a
-        # super_admin a 403 that suggests they lack a permission they have.
+        # Grantability first, so even a super_admin asking for ``client`` gets
+        # 422 rather than 403.
         _reject_ungrantable(role)
         _authorize(caller=caller, role=role, salon_id=salon_id)
 
@@ -86,10 +73,8 @@ class GrantRole:
             except IntegrityError as error:
                 if sqlstate_of(error) != SQLSTATE_UNIQUE_VIOLATION:
                     raise
-                # Granting a role someone already holds is not a failure: the
-                # requested state is the state that exists. Rolling back and
-                # answering 409 would make a retried request look like a
-                # conflict it is not.
+                # The role is already held: the requested state exists, so this
+                # is not a conflict.
                 await self._session.rollback()
                 return GrantedRole(user_id=user_id, role=role, salon_id=salon_id)
 
@@ -120,13 +105,7 @@ class RevokeRole:
     ) -> None:
         """Revoke one grant.
 
-        Symmetrical with granting on purpose: whoever may hand a role out may
-        take it back, and nobody else. An asymmetry here would mean a
-        ``salon_admin`` could appoint a master they then could not remove.
-
-        ``client`` cannot be revoked either. It is what makes an account an
-        account, and a user stripped of it would be one nothing can be booked
-        for; closing an account is deactivation, which is a different thing.
+        Allowed to whoever may grant the role. ``client`` cannot be revoked.
         """
         _reject_ungrantable(role)
         _authorize(caller=caller, role=role, salon_id=salon_id)

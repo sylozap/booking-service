@@ -13,12 +13,9 @@ __all__ = ["SigningKey"]
 
 
 class SigningKey(Base):
-    """One key pair, by the ``kid`` that appears in the JWT header.
+    """The public key of one signing key pair, by the ``kid`` of the JWT header.
 
-    Only the public half is here; the private one is a Kubernetes Secret. A
-    rotation adds a second active key rather than replacing the first, so the
-    tokens signed a minute ago keep verifying while the new ones are issued
-    (docs/04-api-contracts.md).
+    A rotation adds a second active key instead of replacing the first.
     """
 
     __tablename__ = "signing_keys"

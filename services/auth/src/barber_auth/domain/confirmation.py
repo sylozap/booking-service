@@ -1,16 +1,7 @@
-"""What the service knows about a confirmation token without holding one.
+"""Hashing of email confirmation tokens.
 
-Only the hash of the token is stored, so a dump of the database does not let
-anyone confirm an address they do not own. The token itself lives in the email
-and nowhere else.
-
-SHA-256 rather than argon2: the token is 32 bytes from ``secrets`` and has no
-structure to guess, so there is nothing for a slow hash to protect. The value
-is looked up on every confirmation request, and argon2 there would be a cost
-paid for nothing. Passwords are the opposite case and use argon2.
-
-Generating the token is not here: it needs a random source, and the domain does
-not own randomness or the clock (docs/CODING_STANDARDS.md section 6).
+Only the SHA-256 of a token is stored; the token itself exists only in the
+email. SHA-256 is enough because the token is 32 random bytes.
 """
 
 from __future__ import annotations
