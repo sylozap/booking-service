@@ -174,6 +174,26 @@ async def test_the_gateway_headers_are_not_trusted(app: FastAPI) -> None:
     assert response.status_code == 401
 
 
+async def test_openapi_declares_the_bearer_scheme(app: FastAPI) -> None:
+    async with app_client(app) as client:
+        schema = (await client.get("/openapi.json")).json()
+
+    # This is what makes Swagger UI show the Authorize button.
+    assert schema["components"]["securitySchemes"]["BearerToken"] == {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "An access token from `POST /api/v1/auth/login`.",
+    }
+
+
+@pytest.mark.parametrize("path", ["/me", "/admin", "/internal/v1/things"])
+async def test_every_closed_endpoint_requires_the_bearer_scheme(app: FastAPI, path: str) -> None:
+    async with app_client(app) as client:
+        schema = (await client.get("/openapi.json")).json()
+
+    assert schema["paths"][path]["get"]["security"] == [{"BearerToken": []}]
+
+
 async def test_a_sufficient_role_is_let_through(
     app: FastAPI, signing_key: rsa.RSAPrivateKey
 ) -> None:

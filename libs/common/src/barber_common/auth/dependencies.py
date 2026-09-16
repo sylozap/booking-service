@@ -9,6 +9,9 @@ The service verifies the bearer token itself; gateway headers such as
 ``X-User-Id`` are never read. Roles are checked here, while the salon scope is
 checked by the scenario with
 :meth:`~barber_common.auth.claims.Principal.holds`.
+
+The token is read through FastAPI's ``HTTPBearer``, so every closed endpoint
+declares the bearer scheme in OpenAPI and Swagger UI offers to send a token.
 """
 
 from __future__ import annotations
@@ -17,6 +20,7 @@ from collections.abc import Awaitable, Callable
 from typing import Annotated
 
 from fastapi import Depends
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from starlette.requests import Request
 
 from barber_common.auth.claims import ACCESS_TOKEN_TYPE, SERVICE_TOKEN_TYPE, Principal
@@ -40,7 +44,15 @@ __all__ = [
 _logger = get_logger(__name__)
 
 AUTHORIZATION_HEADER = "Authorization"
-BEARER_PREFIX = "Bearer "
+
+# auto_error is off so a missing or malformed header is refused by this module
+# with the platform's problem+json 401, not by FastAPI with its own body.
+_bearer_scheme = HTTPBearer(
+    scheme_name="BearerToken",
+    description="An access token from `POST /api/v1/auth/login`.",
+    auto_error=False,
+)
+BearerCredentials = Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer_scheme)]
 
 
 def use_authentication(app: object, verifier: TokenVerifier) -> None:
@@ -67,14 +79,14 @@ def get_token_verifier(request: Request) -> TokenVerifier:
     return verifier
 
 
-async def current_principal(request: Request) -> Principal:
+async def current_principal(request: Request, credentials: BearerCredentials) -> Principal:
     """Whoever is calling, user or service, with the token already verified.
 
     Rarely used directly: an endpoint almost always wants
     :func:`current_user`, :func:`require_roles` or
     :func:`require_service_token`, all of which are built on this.
     """
-    token = _bearer_token(request)
+    token = _bearer_token(credentials)
     verifier = get_token_verifier(request)
     try:
         return await verifier.verify(token)
@@ -82,19 +94,21 @@ async def current_principal(request: Request) -> Principal:
         raise Unauthorized(str(error)) from error
 
 
-async def current_user(request: Request) -> Principal:
+VerifiedPrincipal = Annotated[Principal, Depends(current_principal)]
+
+
+async def current_user(principal: VerifiedPrincipal) -> Principal:
     """The user behind the request, refusing a service token.
 
     A service token has no user behind it, and an endpoint that treats its
     ``sub`` as a user id writes rows owned by a client id.
     """
-    principal = await current_principal(request)
     if principal.token_type != ACCESS_TOKEN_TYPE:
         raise Unauthorized("a user token is required here")
     return principal
 
 
-def require_roles(*roles: str) -> Callable[[Request], Awaitable[Principal]]:
+def require_roles(*roles: str) -> Callable[..., Awaitable[Principal]]:
     """Build a dependency that admits only these roles.
 
     Holding any one of them is enough: an endpoint open to both a
@@ -105,8 +119,7 @@ def require_roles(*roles: str) -> Callable[[Request], Awaitable[Principal]]:
         raise ValueError("require_roles needs at least one role")
     allowed = frozenset(roles)
 
-    async def dependency(request: Request) -> Principal:
-        principal = await current_user(request)
+    async def dependency(principal: Annotated[Principal, Depends(current_user)]) -> Principal:
         if not principal.has_any_role(allowed):
             # INFO, not ERROR: a refused caller is normal traffic.
             _logger.info("access refused", subject=principal.subject)
@@ -116,7 +129,7 @@ def require_roles(*roles: str) -> Callable[[Request], Awaitable[Principal]]:
     return dependency
 
 
-def require_service_token(*scopes: str) -> Callable[[Request], Awaitable[Principal]]:
+def require_service_token(*scopes: str) -> Callable[..., Awaitable[Principal]]:
     """Build a dependency for an endpoint under ``/internal``.
 
     Refuses a user token outright, whatever roles it carries: the endpoints
@@ -125,8 +138,7 @@ def require_service_token(*scopes: str) -> Callable[[Request], Awaitable[Princip
     """
     required = frozenset(scopes)
 
-    async def dependency(request: Request) -> Principal:
-        principal = await current_principal(request)
+    async def dependency(principal: VerifiedPrincipal) -> Principal:
         if principal.token_type != SERVICE_TOKEN_TYPE:
             raise Unauthorized("a service token is required here")
         if not required.issubset(principal.scopes):
@@ -137,7 +149,7 @@ def require_service_token(*scopes: str) -> Callable[[Request], Awaitable[Princip
     return dependency
 
 
-def require_scopes(*scopes: str) -> Callable[[Request], Awaitable[Principal]]:
+def require_scopes(*scopes: str) -> Callable[..., Awaitable[Principal]]:
     """Alias of :func:`require_service_token`, read at the call site.
 
     ``Depends(require_scopes("catalog:read"))`` says what is being demanded;
@@ -146,18 +158,13 @@ def require_scopes(*scopes: str) -> Callable[[Request], Awaitable[Principal]]:
     return require_service_token(*scopes)
 
 
-def _bearer_token(request: Request) -> str:
-    """Pull the token out of the Authorization header.
+def _bearer_token(credentials: HTTPAuthorizationCredentials | None) -> str:
+    """The token from the Authorization header, or a 401 when there is none.
 
-    The header is never logged and never put in an error message.
+    ``HTTPBearer`` returns ``None`` for a missing header or another scheme. The
+    token is never logged and never put in an error message.
     """
-    header = request.headers.get(AUTHORIZATION_HEADER)
-    if header is None:
-        raise Unauthorized("Authentication required")
-    if not header.startswith(BEARER_PREFIX):
-        raise Unauthorized("Authentication required")
-
-    token = header[len(BEARER_PREFIX) :].strip()
+    token = credentials.credentials.strip() if credentials is not None else ""
     if not token:
         raise Unauthorized("Authentication required")
     return token
