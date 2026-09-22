@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from barber_booking.models.booking import Booking
 from barber_booking.models.master_settings import MasterSettings
 from barber_booking.settings import ALEMBIC_INI
+from barber_common.cache import Cache, cache_from_dsn
 from barber_common.db import create_engine
 from barber_common.db.session import transaction
 from barber_common.testing.fixtures import (
@@ -66,6 +67,24 @@ async def session(
     """One session for a test that talks to the database directly."""
     async with session_factory() as session:
         yield session
+
+
+@pytest.fixture
+async def cache(redis_dsn: str) -> AsyncIterator[Cache]:
+    """A real Redis, emptied first so counters cannot leak between tests."""
+    client = cache_from_dsn(redis_dsn, timeout_seconds=1.0)
+    await client.flushdb()
+    built = Cache(client, ttl_seconds=60)
+
+    yield built
+
+    await built.aclose()
+
+
+@pytest.fixture
+def unreachable_cache() -> Cache:
+    """A cache pointed at a port nothing listens on."""
+    return Cache(cache_from_dsn("redis://127.0.0.1:1/0", timeout_seconds=0.05), ttl_seconds=60)
 
 
 @pytest.fixture

@@ -19,6 +19,9 @@ def build_settings() -> BookingSettings:
         database_dsn=DSN,
         redis_dsn="redis://localhost:6379/0",
         kafka_bootstrap_servers="localhost:9092",
+        catalog_url="http://catalog:8002",
+        auth_url="http://auth:8001",
+        service_client_secret="test-secret",
     )
 
 

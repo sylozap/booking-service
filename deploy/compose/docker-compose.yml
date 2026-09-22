@@ -177,6 +177,9 @@ services:
       # used here rather than the inline PEM so that local and cluster take
       # the same code path.
       JWT_PRIVATE_KEY_PATH: /run/secrets/auth-signing-key.pem
+      # booking reads the internal endpoint of catalog with a token of its own.
+      # A throwaway secret for the local stack, the same one booking sends.
+      SERVICE_CLIENTS: '{"booking": {"secret": "booking-local-secret", "scopes": ["catalog:read"]}}'
     ports:
       - "8001:8001"
     volumes:
@@ -246,6 +249,10 @@ services:
       <<: *service-environment
       SERVICE_NAME: booking
       DATABASE_DSN: postgresql+asyncpg://booking:booking@postgres:5432/booking
+      CATALOG_URL: http://catalog:8002
+      AUTH_URL: http://auth:8001
+      SERVICE_CLIENT_ID: booking
+      SERVICE_CLIENT_SECRET: booking-local-secret
     ports:
       - "8003:8003"
     volumes:
