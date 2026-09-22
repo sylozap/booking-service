@@ -14,6 +14,12 @@ from fastapi import FastAPI
 from barber_booking.api.v1.router import router
 from barber_booking.clients.catalog import CatalogClient
 from barber_booking.clients.service_token import ServiceTokenProvider
+from barber_booking.consumers.catalog_events import (
+    CATALOG_TOPICS,
+    CONSUMER_GROUP,
+    CatalogCacheInvalidation,
+)
+from barber_booking.services.cache import BookingCache
 from barber_booking.settings import ALEMBIC_INI, BookingSettings
 from barber_common.app import create_app, use_database
 from barber_common.auth import jwks_verifier, refreshing, use_authentication
@@ -21,7 +27,7 @@ from barber_common.cache import Cache, cache_from_dsn
 from barber_common.db import Database, check_schema_is_current, load_config
 from barber_common.db.engine import create_engine_from_settings
 from barber_common.http import ServiceClient
-from barber_common.kafka import EventProducer
+from barber_common.kafka import DeadLetterPublisher, EventConsumer, EventProducer
 from barber_common.outbox import OutboxRelay
 
 __all__ = ["create_application"]
@@ -57,6 +63,16 @@ def create_application(settings: BookingSettings | None = None) -> FastAPI:
         # without it, so Redis being down is no reason to leave the balancer.
         app.state.cache = _build_cache(resolved)
 
+        dead_letters = DeadLetterPublisher(bootstrap_servers=resolved.kafka_bootstrap_servers)
+        catalog_events = EventConsumer(
+            topics=CATALOG_TOPICS,
+            group_id=CONSUMER_GROUP,
+            bootstrap_servers=resolved.kafka_bootstrap_servers,
+            session_factory=database.session_factory,
+            dead_letters=dead_letters,
+            handlers=CatalogCacheInvalidation(BookingCache(app.state.cache)).handlers(),
+        )
+
         auth_http = ServiceClient(base_url=resolved.auth_url, upstream="auth")
         catalog_http = ServiceClient(base_url=resolved.catalog_url, upstream="catalog")
         app.state.catalog = CatalogClient(
@@ -81,6 +97,10 @@ def create_application(settings: BookingSettings | None = None) -> FastAPI:
             # verification instead of stopping the start.
             await stack.enter_async_context(refreshing(jwks))
             use_authentication(app, verifier)
+            # Like the relay, the consumer joins its group on the first pass.
+            stack.push_async_callback(dead_letters.stop)
+            stack.push_async_callback(catalog_events.stop)
+            await stack.enter_async_context(catalog_events.run_in_background())
             yield
 
     return create_app(resolved, routers=[router], lifespan=lifespan, title="Barber Booking")

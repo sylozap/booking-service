@@ -7,8 +7,10 @@ enumerate, nothing to scan. ``service.updated`` names no master, so a delete of
 exact keys would first have to find every master offering the service; the
 service's own counter needs no such search.
 
-Keys live under ``booking:`` so they never meet the keys of ``catalog`` in a
-shared Redis. What is left behind under an old generation expires by TTL.
+Every key that depends on a master or a service -- cached availability
+included -- has to carry its generation, or events will not reach it. Keys
+live under ``booking:`` so they never meet the keys of ``catalog`` in a shared
+Redis. What is left behind under an old generation expires by TTL.
 """
 
 from __future__ import annotations
