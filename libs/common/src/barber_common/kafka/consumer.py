@@ -194,7 +194,12 @@ class EventConsumer:
         _logger.info("consumer stopped", group_id=self._group_id)
 
     async def run_once(self) -> int:
-        """Read one batch, handle it, commit as it goes. Returns the count."""
+        """Read one batch, handle it, commit as it goes. Returns the count.
+
+        Joins the group on the first pass rather than at startup, so a broker
+        that is down delays consumption instead of stopping the service.
+        """
+        await self.start()
         batches = await self._client.getmany(timeout_ms=self._poll_timeout_ms)
         handled = 0
         for partition, records in batches.items():

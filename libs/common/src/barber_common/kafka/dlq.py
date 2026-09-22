@@ -121,6 +121,9 @@ class DeadLetterPublisher:
         partition of the dead letter topic too, which is what makes reading
         them in order during a review possible.
         """
+        # Connected on first use, like the relay: a broker that is down at
+        # startup must not stop the service. The call is idempotent.
+        await self.start()
         topic = dlq_topic_of(letter.original_topic)
         await self._client.send_and_wait(
             topic,
