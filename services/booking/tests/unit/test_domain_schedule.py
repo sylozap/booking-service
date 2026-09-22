@@ -9,7 +9,7 @@ import pytest
 
 from barber_booking.domain.errors import (
     ConflictingExceptions,
-    ExceptionInThePast,
+    DateInThePast,
     OverlappingWorkingHours,
 )
 from barber_booking.domain.schedule import (
@@ -19,7 +19,7 @@ from barber_booking.domain.schedule import (
     TimeWindow,
     local_to_utc,
     validate_day_exceptions,
-    validate_exception_date,
+    validate_not_in_past,
     validate_weekly_template,
     working_intervals,
 )
@@ -301,13 +301,13 @@ def test_custom_hours_and_breaks_may_share_a_date() -> None:
     )
 
 
-def test_an_exception_for_yesterday_is_refused() -> None:
-    with pytest.raises(ExceptionInThePast):
-        validate_exception_date(date(2026, 10, 4), today=MONDAY)
+def test_a_change_for_yesterday_is_refused() -> None:
+    with pytest.raises(DateInThePast):
+        validate_not_in_past(date(2026, 10, 4), today=MONDAY)
 
 
-def test_an_exception_for_today_is_accepted() -> None:
-    validate_exception_date(MONDAY, today=MONDAY)
+def test_a_change_for_today_is_accepted() -> None:
+    validate_not_in_past(MONDAY, today=MONDAY)
 
 
 def test_a_window_that_ends_before_it_starts_cannot_exist() -> None:

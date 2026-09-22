@@ -16,6 +16,7 @@ from barber_booking.clients.catalog import CatalogClient
 from barber_booking.clients.service_token import ServiceTokenProvider
 from barber_booking.settings import ALEMBIC_INI, BookingSettings
 from barber_common.app import create_app, use_database
+from barber_common.auth import jwks_verifier, refreshing, use_authentication
 from barber_common.cache import Cache, cache_from_dsn
 from barber_common.db import Database, check_schema_is_current, load_config
 from barber_common.db.engine import create_engine_from_settings
@@ -48,6 +49,10 @@ def create_application(settings: BookingSettings | None = None) -> FastAPI:
         )
         relay = OutboxRelay(session_factory=database.session_factory, producer=producer)
 
+        # Every service checks the tokens it receives itself, against the
+        # public keys of auth, not against a header the gateway set.
+        jwks, verifier = jwks_verifier(resolved)
+
         # Not part of the readiness probe: a read falls through to catalog
         # without it, so Redis being down is no reason to leave the balancer.
         app.state.cache = _build_cache(resolved)
@@ -72,6 +77,10 @@ def create_application(settings: BookingSettings | None = None) -> FastAPI:
             stack.push_async_callback(auth_http.aclose)
             stack.push_async_callback(catalog_http.aclose)
             stack.push_async_callback(app.state.cache.aclose)
+            # Keys are fetched lazily, so auth being down delays the first
+            # verification instead of stopping the start.
+            await stack.enter_async_context(refreshing(jwks))
+            use_authentication(app, verifier)
             yield
 
     return create_app(resolved, routers=[router], lifespan=lifespan, title="Barber Booking")

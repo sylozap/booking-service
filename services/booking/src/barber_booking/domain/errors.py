@@ -11,7 +11,7 @@ from barber_common.errors import DomainError
 
 __all__ = [
     "ConflictingExceptions",
-    "ExceptionInThePast",
+    "DateInThePast",
     "MasterInactive",
     "MasterNotFound",
     "OverlappingWorkingHours",
@@ -59,9 +59,9 @@ class ConflictingExceptions(DomainError):
     title = "Schedule exceptions conflict"
 
 
-class ExceptionInThePast(DomainError):
-    """An exception for a date that has already begun changes nothing."""
+class DateInThePast(DomainError):
+    """A schedule change for a date that has already begun changes nothing."""
 
     code = "validation_error"
     http_status = 422
-    title = "Exception date is in the past"
+    title = "Date is in the past"

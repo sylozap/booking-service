@@ -17,9 +17,10 @@ from zoneinfo import ZoneInfo
 
 from barber_booking.domain.errors import (
     ConflictingExceptions,
-    ExceptionInThePast,
+    DateInThePast,
     OverlappingWorkingHours,
 )
+from barber_booking.domain.identifiers import ExceptionId
 from barber_booking.domain.time_range import TimeRange
 
 __all__ = [
@@ -29,7 +30,7 @@ __all__ = [
     "TimeWindow",
     "local_to_utc",
     "validate_day_exceptions",
-    "validate_exception_date",
+    "validate_not_in_past",
     "validate_weekly_template",
     "working_intervals",
 ]
@@ -87,6 +88,9 @@ class ScheduleException:
     effective_on: date
     kind: ExceptionKind
     window: TimeWindow | None = None
+    reason: str | None = None
+    # Absent until the exception is stored.
+    id: ExceptionId | None = None
 
     def __post_init__(self) -> None:
         if self.kind is ExceptionKind.DAY_OFF and self.window is not None:
@@ -170,14 +174,14 @@ def validate_day_exceptions(exceptions: Sequence[ScheduleException]) -> None:
             raise ConflictingExceptions(f"Two exceptions of kind {first.kind} overlap each other")
 
 
-def validate_exception_date(effective_on: date, *, today: date) -> None:
-    """Refuse an exception for a date that has already begun.
+def validate_not_in_past(day: date, *, today: date) -> None:
+    """Refuse a schedule change for a date that has already gone.
 
     ``today`` is the salon's current date: the past ends at local midnight, not
-    at midnight in UTC.
+    at midnight in UTC. Today itself is still open to changes.
     """
-    if effective_on < today:
-        raise ExceptionInThePast("An exception cannot be set for a date in the past")
+    if day < today:
+        raise DateInThePast(f"{day.isoformat()} is in the past for this salon")
 
 
 def _template_windows(day: date, templates: Sequence[TemplateInterval]) -> list[TimeWindow]:
