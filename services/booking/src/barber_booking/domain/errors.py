@@ -10,8 +10,11 @@ from __future__ import annotations
 from barber_common.errors import DomainError
 
 __all__ = [
+    "ConflictingExceptions",
+    "ExceptionInThePast",
     "MasterInactive",
     "MasterNotFound",
+    "OverlappingWorkingHours",
     "ServiceNotOffered",
 ]
 
@@ -38,3 +41,27 @@ class MasterInactive(DomainError):
     code = "master_inactive"
     http_status = 422
     title = "Master is inactive"
+
+
+class OverlappingWorkingHours(DomainError):
+    """Two intervals of one weekday overlap: the template would say two things."""
+
+    code = "validation_error"
+    http_status = 422
+    title = "Working hours overlap"
+
+
+class ConflictingExceptions(DomainError):
+    """Exceptions of one date contradict each other."""
+
+    code = "validation_error"
+    http_status = 422
+    title = "Schedule exceptions conflict"
+
+
+class ExceptionInThePast(DomainError):
+    """An exception for a date that has already begun changes nothing."""
+
+    code = "validation_error"
+    http_status = 422
+    title = "Exception date is in the past"
