@@ -84,6 +84,9 @@ class BookingCreated(BaseModel):
     status: str
     # When the reminder is due, or nothing if it is already in the past.
     reminder_at: datetime | None = None
+    # Who made it: the client themselves, or an admin of the salon who booked
+    # on their behalf -- which changes how the client is told.
+    created_by: UUID | None = None
 
 
 class CancelledBy(StrEnum):

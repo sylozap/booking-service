@@ -140,12 +140,21 @@ class Booking:
         cancel_deadline_min: int,
         start_at: datetime,
         reminder_at: datetime | None,
+        by: Actor,
     ) -> Booking:
-        """A new booking, confirmed at once.
+        """A new booking, confirmed at once, made by ``by``.
+
+        A client books for themselves. Booking for somebody else -- a client
+        who called or walked in -- is the salon's: its admin puts the visit on
+        that client's account, and ``created_by`` remembers who did.
 
         ``pending`` exists for a prepayment step the platform does not have
         yet, so nothing waits in it today.
         """
+        if by.user_id is None:
+            raise ValueError("a booking is made by somebody")
+        if by.user_id != client_user_id and not by.runs_salon:
+            raise NotAllowedForActor("Only the salon may book on behalf of another client")
         return cls(
             id=id,
             salon_id=salon_id,
@@ -156,7 +165,7 @@ class Booking:
             cancel_deadline_min=cancel_deadline_min,
             start_at=start_at,
             status=BookingStatus.CONFIRMED,
-            created_by=client_user_id,
+            created_by=by.user_id,
             reminder_at=reminder_at,
         )
 

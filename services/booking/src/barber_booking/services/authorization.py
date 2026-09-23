@@ -22,6 +22,8 @@ __all__ = [
     "BOOKING_ROLES",
     "SCHEDULE_MANAGERS",
     "booking_actor",
+    "booking_creator",
+    "may_book_for_others",
     "booking_scope",
     "require_schedule_access",
 ]
@@ -95,4 +97,23 @@ def booking_scope(caller: Principal) -> BookingScope:
         admin_of=frozenset(admin_of),
         master_in=frozenset(master_in),
         master_anywhere=master_anywhere,
+    )
+
+
+def may_book_for_others(caller: Principal) -> bool:
+    """Whether the caller runs any salon at all, before it is known which one.
+
+    Lets a client who names somebody else be refused before catalog is asked;
+    whether it is the right salon is decided once the master's salon is known.
+    """
+    return caller.holds("super_admin") or caller.has_any_role(frozenset({"salon_admin"}))
+
+
+def booking_creator(caller: Principal, *, salon_id: SalonId, client_user_id: UserId) -> Actor:
+    """The capacities in which the caller makes a booking in this salon."""
+    user_id = UserId(caller.user_id)
+    return Actor(
+        user_id=user_id,
+        is_client=user_id == client_user_id,
+        runs_salon=caller.holds("super_admin") or caller.holds("salon_admin", salon_id=salon_id),
     )

@@ -474,10 +474,10 @@ async def test_the_booking_belongs_to_the_caller_of_the_token(
 
     response = await book(
         app,
-        # Even if the body carried a client, it would be refused as unknown.
+        # Naming somebody else is the salon's power, not a client's.
         {**a_booking(master), "client_user_id": str(uuid4())},
         authorize(user_id=client_id),
     )
 
-    assert response.status_code == 422
+    assert response.status_code == 403
     assert await bookings_of(session, master.master_id) == 0

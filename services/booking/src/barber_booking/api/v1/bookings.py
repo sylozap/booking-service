@@ -40,9 +40,9 @@ __all__ = ["router"]
 
 router = APIRouter(prefix="/bookings", tags=["bookings"])
 
-# Everyone who registers holds this role, so the check does not narrow who may
-# book; it is what keeps the endpoint closed to a service token.
-Client = Annotated[Principal, Depends(require_roles("client"))]
+# A client books for themselves, the salon for a client. Every registered user
+# is a client; the check is what keeps the endpoint closed to a service token.
+Booker = Annotated[Principal, Depends(require_roles("client", "salon_admin", "super_admin"))]
 # Anyone a booking may concern. Which booking, and in what capacity, is checked
 # by the scenario once the booking is loaded.
 Participant = Annotated[Principal, Depends(require_roles(*BOOKING_ROLES))]
@@ -60,6 +60,10 @@ _REFUSED: dict[int | str, dict[str, object]] = {
     status_code=status.HTTP_201_CREATED,
     summary="Book a master for a service",
     responses={
+        status.HTTP_403_FORBIDDEN: {
+            "description": "`client_user_id` names somebody else and the caller does not run "
+            "the master's salon"
+        },
         status.HTTP_409_CONFLICT: {
             "description": "The slot was taken while this request was in flight"
         },
@@ -74,11 +78,18 @@ _REFUSED: dict[int | str, dict[str, object]] = {
 )
 async def create_booking(
     body: BookingCreateRequest,
-    caller: Client,
+    caller: Booker,
     request: RequiredIdempotencyKey,
     scenario: CreateBookingScenario,
 ) -> BookingResponse:
-    """Create a booking for the caller and confirm it at once.
+    """Create a booking and confirm it at once.
+
+    The booking is the caller's own, unless `client_user_id` names another
+    account: a `salon_admin` of the master's salon, or a `super_admin`, books
+    a client who called or walked in. Anybody else naming another account is
+    `403`. The account is not checked against the platform's users -- the
+    salon takes it from the client's profile. `created_by` records who made
+    the booking; the key of `Idempotency-Key` belongs to the caller.
 
     The booking is written with a snapshot of the service -- its name, price
     and duration as they are now -- so a later change to the price list does

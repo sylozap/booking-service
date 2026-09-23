@@ -36,8 +36,10 @@ def a_booking(
     start_at: datetime = START,
     buffer_min: int = 0,
     cancel_deadline_min: int = 240,
+    by: Actor | None = None,
 ) -> Booking:
     """A confirmed 45-minute booking; a test bends the fields it is about."""
+    by = by or Actor(user_id=CLIENT, is_client=True)
     return Booking.confirmed(
         id=BookingId(uuid4()),
         salon_id=SalonId(uuid4()),
@@ -54,6 +56,7 @@ def a_booking(
         cancel_deadline_min=cancel_deadline_min,
         start_at=start_at,
         reminder_at=None,
+        by=by,
     )
 
 
@@ -323,3 +326,24 @@ def test_the_salon_on_its_own_cancels_with_nobody_recorded() -> None:
     assert cancelled.status is BookingStatus.CANCELLED_BY_SALON
     assert cancelled.cancelled_by is None
     assert cancelled.cancel_reason == "gone"
+
+
+# --- booking for somebody else ----------------------------------------------
+
+
+def test_the_salon_books_on_behalf_of_a_client_and_is_remembered_for_it() -> None:
+    booking = a_booking(by=AS_SALON)
+
+    assert booking.client_user_id == CLIENT
+    assert booking.created_by == ADMIN
+
+
+@pytest.mark.parametrize("actor", [AS_MASTER, AS_STRANGER])
+def test_nobody_but_the_salon_books_for_somebody_else(actor: Actor) -> None:
+    with pytest.raises(NotAllowedForActor):
+        a_booking(by=actor)
+
+
+def test_a_booking_is_made_by_somebody() -> None:
+    with pytest.raises(ValueError, match="somebody"):
+        a_booking(by=Actor.the_salon())

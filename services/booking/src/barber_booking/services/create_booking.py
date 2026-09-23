@@ -21,8 +21,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from barber_booking.clients.catalog import CatalogClient
-from barber_booking.domain.booking import Booking, ServiceSnapshot, reminder_for
-from barber_booking.domain.errors import MasterInactive
+from barber_booking.domain.booking import Actor, Booking, ServiceSnapshot, reminder_for
+from barber_booking.domain.errors import MasterInactive, NotAllowedForActor
 from barber_booking.domain.identifiers import BookingId, MasterId, SalonId, ServiceId, UserId
 from barber_booking.domain.policies import (
     validate_horizon,
@@ -37,6 +37,7 @@ from barber_booking.repositories.master_settings import MasterSettingsRepository
 from barber_booking.repositories.schedule import ScheduleRepository
 from barber_booking.schemas.bookings import BookingCreateRequest, BookingResponse
 from barber_booking.services.alternatives import SlotTaken
+from barber_booking.services.authorization import booking_creator, may_book_for_others
 from barber_booking.services.booking_response import booking_response
 from barber_booking.services.cache import BookingCache
 from barber_booking.services.clock import Clock, utc_now
@@ -99,13 +100,28 @@ class CreateBooking:
     ) -> BookingResponse:
         """Create the booking, or repeat the answer this key already got."""
         now = self._clock()
-        client_user_id = UserId(caller.user_id)
+        # The key belongs to whoever sends the request: an admin repeating a
+        # booking they made for a client gets their own answer back.
+        caller_id = UserId(caller.user_id)
+        client_user_id = (
+            UserId(body.client_user_id) if body.client_user_id is not None else caller_id
+        )
+        if client_user_id == caller_id and not caller.holds("client"):
+            # An admin's own haircut is booked with their client role, like
+            # anybody's; without it the admin books only for others.
+            raise NotAllowedForActor("Booking for yourself takes the client role")
+        if client_user_id != caller_id and not may_book_for_others(caller):
+            # Refused before catalog is asked: no salon would make it allowed.
+            raise NotAllowedForActor("Only the salon may book on behalf of another client")
         master_id = MasterId(body.master_id)
         service_id = ServiceId(body.service_id)
 
         offering = await self._offerings.execute(master_id=master_id, service_id=service_id)
         if not offering.master_active:
             raise MasterInactive("This master takes no bookings")
+        creator = booking_creator(
+            caller, salon_id=SalonId(offering.salon_id), client_user_id=client_user_id
+        )
 
         zone = ZoneInfo(offering.salon.timezone)
         validate_lead_time(body.start_at, now=now, lead_min=offering.salon.booking_min_lead_min)
@@ -118,6 +134,8 @@ class CreateBooking:
 
         try:
             created, response = await self._write(
+                caller_id=caller_id,
+                creator=creator,
                 client_user_id=client_user_id,
                 master_id=master_id,
                 service_id=service_id,
@@ -131,7 +149,7 @@ class CreateBooking:
             if is_unique_violation(error, constraint=IDEMPOTENCY_CONSTRAINT):
                 # A second request with the same key got here first. Its answer
                 # is the one this caller asked for.
-                return await self._answer_already_given(client_user_id, request, now, error)
+                return await self._answer_already_given(caller_id, request, now, error)
             if not is_overlap(error):
                 # A unique violation is something else entirely, and reporting
                 # it as a taken slot would hide a real defect.
@@ -154,6 +172,8 @@ class CreateBooking:
     async def _write(
         self,
         *,
+        caller_id: UserId,
+        creator: Actor,
         client_user_id: UserId,
         master_id: MasterId,
         service_id: ServiceId,
@@ -165,7 +185,7 @@ class CreateBooking:
     ) -> tuple[bool, BookingResponse]:
         """The transaction: the key, the row and the event, or none of them."""
         async with transaction(self._session):
-            stored = await self._idempotency.find(user_id=client_user_id, request=request, now=now)
+            stored = await self._idempotency.find(user_id=caller_id, request=request, now=now)
             if stored is not None:
                 return False, BookingResponse.model_validate(stored.body)
 
@@ -183,6 +203,7 @@ class CreateBooking:
                 _booking_of(
                     body=body,
                     client_user_id=client_user_id,
+                    creator=creator,
                     buffer_min=buffer_min,
                     offering=offering,
                     reminder_at=reminder_for(body.start_at, now=now, lead=self._reminder_lead),
@@ -197,7 +218,7 @@ class CreateBooking:
                 payload=_event_of(booking),
             )
             await self._idempotency.remember(
-                user_id=client_user_id,
+                user_id=caller_id,
                 request=request,
                 response=StoredResponse(
                     status=CREATED_STATUS, body=response.model_dump(mode="json")
@@ -220,14 +241,14 @@ class CreateBooking:
 
     async def _answer_already_given(
         self,
-        client_user_id: UserId,
+        caller_id: UserId,
         request: IdempotentRequest,
         now: datetime,
         error: IntegrityError,
     ) -> BookingResponse:
         """Read what the request that won the key stored."""
         async with transaction(self._session):
-            stored = await self._idempotency.find(user_id=client_user_id, request=request, now=now)
+            stored = await self._idempotency.find(user_id=caller_id, request=request, now=now)
         if stored is None:  # pragma: no cover - the winner commits before it releases the key
             raise error
         return BookingResponse.model_validate(stored.body)
@@ -237,6 +258,7 @@ def _booking_of(
     *,
     body: BookingCreateRequest,
     client_user_id: UserId,
+    creator: Actor,
     buffer_min: int,
     offering: MasterServiceDetails,
     reminder_at: datetime | None,
@@ -259,6 +281,7 @@ def _booking_of(
         cancel_deadline_min=offering.salon.cancel_deadline_min,
         start_at=body.start_at,
         reminder_at=reminder_at,
+        by=creator,
     )
 
 
@@ -276,4 +299,5 @@ def _event_of(booking: Booking) -> BookingCreated:
         end_at=booking.end_at,
         status=booking.status.value,
         reminder_at=booking.reminder_at,
+        created_by=booking.created_by,
     )
