@@ -14,15 +14,16 @@ answers that at the moment of the insert, and a violation becomes
 from __future__ import annotations
 
 from datetime import datetime, time, timedelta
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from barber_booking.clients.catalog import CatalogClient
-from barber_booking.domain.booking_status import BookingStatus
+from barber_booking.domain.booking import Booking, ServiceSnapshot
 from barber_booking.domain.errors import MasterInactive, SlotAlreadyTaken
-from barber_booking.domain.identifiers import MasterId, ServiceId, UserId
+from barber_booking.domain.identifiers import BookingId, MasterId, SalonId, ServiceId, UserId
 from barber_booking.domain.policies import (
     validate_horizon,
     validate_lead_time,
@@ -31,23 +32,18 @@ from barber_booking.domain.policies import (
 from barber_booking.domain.schedule import working_intervals
 from barber_booking.domain.time_range import TimeRange
 from barber_booking.metrics import BOOKING_CONFLICTS, BOOKINGS_CREATED
-from barber_booking.models.booking import OVERLAP_CONSTRAINT, Booking
 from barber_booking.repositories.availability import AvailabilityRepository
-from barber_booking.repositories.bookings import BookingRepository
+from barber_booking.repositories.bookings import BookingRepository, is_overlap
 from barber_booking.repositories.master_settings import MasterSettingsRepository
 from barber_booking.repositories.schedule import ScheduleRepository
 from barber_booking.schemas.bookings import BookingCreateRequest, BookingResponse
+from barber_booking.services.booking_response import booking_response
 from barber_booking.services.cache import BookingCache
 from barber_booking.services.clock import Clock, utc_now
 from barber_booking.services.offerings import ReadOffering
 from barber_common.auth import Principal
 from barber_common.contracts.catalog import MasterServiceDetails
-from barber_common.db.errors import (
-    SQLSTATE_EXCLUSION_VIOLATION,
-    constraint_name_of,
-    is_unique_violation,
-    sqlstate_of,
-)
+from barber_common.db.errors import is_unique_violation
 from barber_common.db.session import transaction
 from barber_common.events.bookings import (
     BOOKING_AGGREGATE_TYPE,
@@ -142,7 +138,7 @@ class CreateBooking:
                 # A second request with the same key got here first. Its answer
                 # is the one this caller asked for.
                 return await self._answer_already_given(client_user_id, request, now, error)
-            if not _is_overlap(error):
+            if not is_overlap(error):
                 # A unique violation is something else entirely, and reporting
                 # it as a taken slot would hide a real defect.
                 raise
@@ -198,7 +194,7 @@ class CreateBooking:
                     reminder_at=self._reminder_for(body.start_at, now),
                 )
             )
-            response = _response(booking)
+            response = booking_response(booking)
             await self._outbox.add(
                 topic=BOOKINGS_TOPIC,
                 aggregate_type=BOOKING_AGGREGATE_TYPE,
@@ -317,46 +313,24 @@ def _booking_of(
     offering: MasterServiceDetails,
     reminder_at: datetime | None,
 ) -> Booking:
-    return Booking(
-        salon_id=offering.salon_id,
-        master_id=body.master_id,
+    return Booking.confirmed(
+        id=BookingId(uuid4()),
+        salon_id=SalonId(offering.salon_id),
+        master_id=MasterId(body.master_id),
         client_user_id=client_user_id,
-        service_id=body.service_id,
         # The snapshot: renaming the service or changing its price later does
         # not rewrite what this client booked.
-        service_name=offering.service_name,
-        price=offering.price,
-        currency=offering.currency,
-        duration_min=offering.duration_min,
+        service=ServiceSnapshot(
+            service_id=ServiceId(body.service_id),
+            name=offering.service_name,
+            price=offering.price,
+            currency=offering.currency,
+            duration_min=offering.duration_min,
+        ),
         buffer_min=buffer_min,
         cancel_deadline_min=offering.salon.cancel_deadline_min,
         start_at=body.start_at,
-        end_at=body.start_at + timedelta(minutes=offering.duration_min),
-        # Confirmed at once: pending exists for a prepayment step the platform
-        # does not have yet.
-        status=BookingStatus.CONFIRMED.value,
-        created_by=client_user_id,
         reminder_at=reminder_at,
-    )
-
-
-def _response(booking: Booking) -> BookingResponse:
-    return BookingResponse(
-        id=booking.id,
-        salon_id=booking.salon_id,
-        master_id=booking.master_id,
-        client_user_id=booking.client_user_id,
-        service_id=booking.service_id,
-        service_name=booking.service_name,
-        price=booking.price,
-        currency=booking.currency,
-        duration_min=booking.duration_min,
-        buffer_min=booking.buffer_min,
-        start_at=booking.start_at,
-        end_at=booking.end_at,
-        status=booking.status,
-        reminder_at=booking.reminder_at,
-        created_at=booking.created_at,
     )
 
 
@@ -366,22 +340,14 @@ def _event_of(booking: Booking) -> BookingCreated:
         salon_id=booking.salon_id,
         master_id=booking.master_id,
         client_user_id=booking.client_user_id,
-        service_id=booking.service_id,
-        service_name=booking.service_name,
-        price=booking.price,
-        currency=booking.currency,
+        service_id=booking.service.service_id,
+        service_name=booking.service.name,
+        price=booking.service.price,
+        currency=booking.service.currency,
         start_at=booking.start_at,
         end_at=booking.end_at,
-        status=booking.status,
+        status=booking.status.value,
         reminder_at=booking.reminder_at,
-    )
-
-
-def _is_overlap(error: IntegrityError) -> bool:
-    """Whether this is the exclusion constraint, and not another violation."""
-    return (
-        sqlstate_of(error) == SQLSTATE_EXCLUSION_VIOLATION
-        and constraint_name_of(error) == OVERLAP_CONSTRAINT
     )
 
 
