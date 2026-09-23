@@ -2,6 +2,10 @@
 
 Only a ``super_admin`` creates salons; the administrator of a salon may change
 it. Reading is open to everyone, including anonymous callers.
+
+A salon has no topic of its own. The one change of it another service has to
+learn about is the time zone -- ``booking`` writes every schedule in it -- and
+that is announced as ``master.updated`` for each master of the salon.
 """
 
 from __future__ import annotations
@@ -13,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from barber_catalog.domain.errors import SalonNotFound
 from barber_catalog.domain.identifiers import SalonId
 from barber_catalog.models.salon import Salon
+from barber_catalog.repositories.masters import MasterRepository
 from barber_catalog.repositories.salons import (
     SALON_CURSOR_ARITY,
     SalonRepository,
@@ -25,9 +30,16 @@ from barber_catalog.schemas.salons import (
 )
 from barber_catalog.services.authorization import require_salon_scope
 from barber_catalog.services.cache import CatalogCache
+from barber_catalog.services.masters import master_snapshot
 from barber_common.auth import Principal
 from barber_common.db.session import transaction
+from barber_common.events.catalog import (
+    CATALOG_MASTERS_TOPIC,
+    MASTER_AGGREGATE_TYPE,
+    MasterEventType,
+)
 from barber_common.logging import get_logger
+from barber_common.outbox import OutboxRepository
 from barber_common.pagination import Page, PageRequest
 
 __all__ = ["CreateSalon", "ListSalons", "ReadSalon", "UpdateSalon", "salon_response"]
@@ -102,6 +114,8 @@ class UpdateSalon:
     def __init__(self, session: AsyncSession, cache: CatalogCache) -> None:
         self._session = session
         self._salons = SalonRepository(session)
+        self._masters = MasterRepository(session)
+        self._outbox = OutboxRepository(session)
         self._cache = cache
 
     async def execute(
@@ -124,9 +138,13 @@ class UpdateSalon:
 
             require_salon_scope(caller, salon.id)
 
+            previous_timezone = salon.timezone
             for field, value in body.model_dump(exclude_unset=True).items():
                 setattr(salon, field, value)
             await self._session.flush()
+
+            if salon.timezone != previous_timezone:
+                await self._announce_timezone(salon)
             # Inside the transaction, for the same reason as in CreateSalon.
             response = salon_response(salon)
 
@@ -136,6 +154,22 @@ class UpdateSalon:
 
         _logger.info("salon updated", salon_id=str(salon.id), updated_by=caller.subject)
         return response
+
+    async def _announce_timezone(self, salon: Salon) -> None:
+        """Tell booking, master by master, that the schedules are in another zone.
+
+        In the transaction of the change: a salon in the new zone whose masters
+        booking still reads in the old one is the state the outbox exists to
+        rule out. A salon has tens of masters, so the fan-out stays small.
+        """
+        for master in await self._masters.in_salon(SalonId(salon.id)):
+            await self._outbox.add(
+                topic=CATALOG_MASTERS_TOPIC,
+                aggregate_type=MASTER_AGGREGATE_TYPE,
+                aggregate_id=master.id,
+                event_type=MasterEventType.UPDATED.value,
+                payload=master_snapshot(master, salon),
+            )
 
 
 class ReadSalon:

@@ -22,11 +22,12 @@ from barber_catalog.models.master_service import MasterService
 from barber_catalog.models.service import Service
 from barber_catalog.repositories.master_services import MasterServiceRepository
 from barber_catalog.repositories.masters import MasterRepository
+from barber_catalog.repositories.salons import SalonRepository
 from barber_catalog.repositories.services import ServiceRepository
 from barber_catalog.schemas.master_services import MasterServiceRequest, MasterServiceResponse
 from barber_catalog.services.authorization import require_salon_scope
 from barber_catalog.services.cache import CatalogCache
-from barber_catalog.services.masters import master_snapshot
+from barber_catalog.services.masters import snapshot_of
 from barber_common.auth import Principal
 from barber_common.db.session import transaction
 from barber_common.events.catalog import (
@@ -75,6 +76,7 @@ class LinkMasterService:
     def __init__(self, session: AsyncSession, cache: CatalogCache) -> None:
         self._session = session
         self._masters = MasterRepository(session)
+        self._salons = SalonRepository(session)
         self._services = ServiceRepository(session)
         self._links = MasterServiceRepository(session)
         self._outbox = OutboxRepository(session)
@@ -129,7 +131,7 @@ class LinkMasterService:
                 aggregate_type=MASTER_AGGREGATE_TYPE,
                 aggregate_id=master.id,
                 event_type=MasterEventType.UPDATED.value,
-                payload=master_snapshot(master),
+                payload=await snapshot_of(master, self._salons),
             )
 
             response = master_service_response(link, service)
@@ -151,6 +153,7 @@ class UnlinkMasterService:
     def __init__(self, session: AsyncSession, cache: CatalogCache) -> None:
         self._session = session
         self._masters = MasterRepository(session)
+        self._salons = SalonRepository(session)
         self._links = MasterServiceRepository(session)
         self._outbox = OutboxRepository(session)
         self._cache = cache
@@ -184,7 +187,7 @@ class UnlinkMasterService:
                 aggregate_type=MASTER_AGGREGATE_TYPE,
                 aggregate_id=master.id,
                 event_type=MasterEventType.UPDATED.value,
-                payload=master_snapshot(master),
+                payload=await snapshot_of(master, self._salons),
             )
             await self._session.flush()
 
