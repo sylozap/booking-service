@@ -11,13 +11,20 @@ whose it is. What each capacity may do is the domain's rule, not this module's.
 from __future__ import annotations
 
 from barber_booking.domain.booking import Actor, Booking
-from barber_booking.domain.identifiers import UserId
+from barber_booking.domain.identifiers import SalonId, UserId
 from barber_booking.domain.master import MasterSettings
+from barber_booking.domain.visibility import BookingScope
 from barber_common.auth import Principal
 from barber_common.errors import Forbidden
 from barber_common.logging import get_logger
 
-__all__ = ["BOOKING_ROLES", "SCHEDULE_MANAGERS", "booking_actor", "require_schedule_access"]
+__all__ = [
+    "BOOKING_ROLES",
+    "SCHEDULE_MANAGERS",
+    "booking_actor",
+    "booking_scope",
+    "require_schedule_access",
+]
 
 _logger = get_logger(__name__)
 
@@ -56,4 +63,36 @@ def booking_actor(caller: Principal, booking: Booking, master: MasterSettings | 
         is_master=master is not None
         and master.user_id == user_id
         and caller.holds("master", salon_id=booking.salon_id),
+    )
+
+
+def booking_scope(caller: Principal) -> BookingScope:
+    """Every booking the caller's roles open, as one scope.
+
+    A grant of ``salon_admin`` not limited to a salon opens every salon, the
+    same as ``super_admin``: :meth:`Principal.holds` reads a global grant that
+    way everywhere else, and a listing must not be stricter than the actions.
+    """
+    admin_of: set[SalonId] = set()
+    master_in: set[SalonId] = set()
+    sees_everything = caller.holds("super_admin")
+    master_anywhere = False
+    for grant in caller.roles:
+        if grant.role == "salon_admin":
+            if grant.salon_id is None:
+                sees_everything = True
+            else:
+                admin_of.add(SalonId(grant.salon_id))
+        elif grant.role == "master":
+            if grant.salon_id is None:
+                master_anywhere = True
+            else:
+                master_in.add(SalonId(grant.salon_id))
+
+    return BookingScope(
+        user_id=UserId(caller.user_id),
+        sees_everything=sees_everything,
+        admin_of=frozenset(admin_of),
+        master_in=frozenset(master_in),
+        master_anywhere=master_anywhere,
     )

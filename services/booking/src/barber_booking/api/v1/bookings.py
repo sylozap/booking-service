@@ -11,16 +11,20 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Body, Depends, status
+from fastapi import APIRouter, Body, Depends, Query, status
+from pydantic import AwareDatetime
 
 from barber_booking.api.v1.dependencies import (
     CancelBookingScenario,
     CloseVisitScenario,
     CreateBookingScenario,
+    ListBookingsScenario,
+    ReadBookingScenario,
     RescheduleBookingScenario,
 )
 from barber_booking.domain.booking_status import BookingStatus
-from barber_booking.domain.identifiers import BookingId
+from barber_booking.domain.identifiers import BookingId, MasterId, SalonId
+from barber_booking.domain.visibility import BookingFilters
 from barber_booking.schemas.bookings import (
     BookingCancelRequest,
     BookingCreateRequest,
@@ -30,6 +34,7 @@ from barber_booking.schemas.bookings import (
 from barber_booking.services.authorization import BOOKING_ROLES
 from barber_common.auth import Principal, require_roles
 from barber_common.idempotency import RequiredIdempotencyKey
+from barber_common.pagination import Page, Pagination
 
 __all__ = ["router"]
 
@@ -93,6 +98,72 @@ async def create_booking(
     is `409 slot_taken`.
     """
     return await scenario.execute(caller=caller, request=request, body=body)
+
+
+@router.get(
+    "",
+    summary="List bookings",
+    responses={
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {
+            "description": "The period ends before it starts, or the cursor is not valid"
+        }
+    },
+)
+async def list_bookings(
+    caller: Participant,
+    scenario: ListBookingsScenario,
+    pagination: Pagination,
+    starts_from: Annotated[
+        AwareDatetime | None,
+        Query(alias="from", description="Bookings starting at or after this instant."),
+    ] = None,
+    starts_before: Annotated[
+        AwareDatetime | None,
+        Query(alias="to", description="Bookings starting before this instant."),
+    ] = None,
+    master_id: Annotated[UUID | None, Query()] = None,
+    salon_id: Annotated[UUID | None, Query()] = None,
+    statuses: Annotated[
+        list[BookingStatus] | None,
+        Query(alias="status", description="Repeat to accept several statuses."),
+    ] = None,
+) -> Page[BookingResponse]:
+    """The bookings the caller may see, by start time, a page at a time.
+
+    What is visible depends on who asks, not on the filters: a client sees the
+    bookings they made; a master also sees every booking with them; a
+    `salon_admin` sees every booking of their salon; a `super_admin` sees all.
+    A master who books a haircut elsewhere sees it as its client. The filters
+    narrow that set further -- a `salon_id` of another salon yields an empty
+    page, not an error.
+
+    Ordered by `start_at`, oldest first. Pages are cursor-based: pass
+    `next_cursor` back as `cursor` until it is `null`.
+    """
+    filters = BookingFilters(
+        starts_from=starts_from,
+        starts_before=starts_before,
+        master_id=MasterId(master_id) if master_id is not None else None,
+        salon_id=SalonId(salon_id) if salon_id is not None else None,
+        statuses=frozenset(statuses or ()),
+    )
+    return await scenario.execute(caller=caller, filters=filters, request=pagination)
+
+
+@router.get(
+    "/{booking_id}",
+    summary="Read one booking",
+    responses={status.HTTP_404_NOT_FOUND: {"description": "No such booking, or not visible"}},
+)
+async def read_booking(
+    booking_id: UUID, caller: Participant, scenario: ReadBookingScenario
+) -> BookingResponse:
+    """One booking, if the caller may see it -- by the same rules as the list.
+
+    A booking the caller may not see is `404`, exactly like one that does not
+    exist: the answer says nothing about other people's appointments.
+    """
+    return await scenario.execute(caller=caller, booking_id=BookingId(booking_id))
 
 
 @router.post(

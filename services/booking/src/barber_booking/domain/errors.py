@@ -18,6 +18,7 @@ __all__ = [
     "CancelDeadlinePassed",
     "ConflictingExceptions",
     "DateInThePast",
+    "InvalidPeriod",
     "MasterInactive",
     "MasterNotFound",
     "NotAllowedForActor",
@@ -74,6 +75,14 @@ class DateInThePast(DomainError):
     code = "validation_error"
     http_status = 422
     title = "Date is in the past"
+
+
+class InvalidPeriod(DomainError):
+    """A period that ends before it starts selects nothing, and is surely a mistake."""
+
+    code = "validation_error"
+    http_status = 422
+    title = "Period ends before it starts"
 
 
 class BookingTooLate(DomainError):
