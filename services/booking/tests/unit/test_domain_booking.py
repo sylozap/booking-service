@@ -312,3 +312,14 @@ def test_a_closed_visit_still_holds_its_time() -> None:
 def test_only_an_outcome_of_a_visit_closes_it() -> None:
     with pytest.raises(ValueError, match="how a visit ends"):
         a_booking().close(outcome=BookingStatus.CANCELLED_BY_SALON, by=AS_SALON, now=AFTER_START)
+
+
+# --- the salon on its own ---------------------------------------------------
+
+
+def test_the_salon_on_its_own_cancels_with_nobody_recorded() -> None:
+    cancelled = a_booking().cancel(by=Actor.the_salon(), now=hours_before(1), reason="gone")
+
+    assert cancelled.status is BookingStatus.CANCELLED_BY_SALON
+    assert cancelled.cancelled_by is None
+    assert cancelled.cancel_reason == "gone"

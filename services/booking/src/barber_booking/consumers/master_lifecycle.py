@@ -14,10 +14,13 @@ from __future__ import annotations
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from barber_booking.domain.identifiers import MasterId
+from barber_booking.services.cascade_cancel import CancelMasterBookings
 from barber_booking.services.master_lifecycle import FollowMaster
 from barber_common.events.catalog import (
     CATALOG_MASTERS_TOPIC,
     MasterCreated,
+    MasterDeactivated,
     MasterEventType,
     MasterUpdated,
 )
@@ -38,6 +41,7 @@ class MasterLifecycle:
         return {
             MasterEventType.CREATED: self.master_created,
             MasterEventType.UPDATED: self.master_updated,
+            MasterEventType.DEACTIVATED: self.master_deactivated,
         }
 
     async def master_created(self, session: AsyncSession, envelope: JsonEnvelope) -> None:
@@ -46,3 +50,10 @@ class MasterLifecycle:
     async def master_updated(self, session: AsyncSession, envelope: JsonEnvelope) -> None:
         """Covers reactivation too: it is announced as an update with is_active."""
         await FollowMaster(session).updated(MasterUpdated.model_validate(envelope.payload))
+
+    async def master_deactivated(self, session: AsyncSession, envelope: JsonEnvelope) -> None:
+        """The cascade: every visit of the master still ahead is cancelled."""
+        event = MasterDeactivated.model_validate(envelope.payload)
+        await CancelMasterBookings(session).execute(
+            master_id=MasterId(event.master_id), cause=envelope.event_id
+        )

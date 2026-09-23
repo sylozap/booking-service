@@ -22,7 +22,17 @@ from barber_booking.domain.errors import (
 from barber_booking.domain.identifiers import BookingId, MasterId, SalonId, ServiceId, UserId
 from barber_booking.domain.time_range import TimeRange
 
-__all__ = ["VISIT_OUTCOMES", "Actor", "Booking", "ServiceSnapshot", "reminder_for"]
+__all__ = [
+    "MASTER_DEACTIVATED",
+    "VISIT_OUTCOMES",
+    "Actor",
+    "Booking",
+    "ServiceSnapshot",
+    "reminder_for",
+]
+
+# The reason a cascade writes on every booking it cancels, and sends on.
+MASTER_DEACTIVATED = "master_deactivated"
 
 # What a visit that has started can turn out to be. Both keep the time taken:
 # the exclusion constraint counts them, so the past never becomes bookable.
@@ -62,13 +72,23 @@ class Actor:
     salon is its client and runs the salon at once.
     """
 
-    user_id: UserId
+    # Nobody for the platform acting on its own, as when a master leaves.
+    user_id: UserId | None
     # The client of this booking.
     is_client: bool = False
     # A salon_admin of its salon, or a super_admin.
     runs_salon: bool = False
     # The master the booking is with.
     is_master: bool = False
+
+    @classmethod
+    def the_salon(cls) -> Actor:
+        """The salon acting with nobody behind the request.
+
+        A cascade started by an event has the powers of the salon and no
+        person to record as the one who cancelled.
+        """
+        return cls(user_id=None, runs_salon=True)
 
 
 @dataclass(frozen=True, slots=True)

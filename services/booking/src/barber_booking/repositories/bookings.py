@@ -10,7 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from barber_booking.domain.booking import Booking, ServiceSnapshot
-from barber_booking.domain.booking_status import BookingStatus
+from barber_booking.domain.booking_status import OPEN_STATUSES, BookingStatus
 from barber_booking.domain.identifiers import BookingId, MasterId, SalonId, ServiceId, UserId
 from barber_booking.domain.visibility import BookingFilters, BookingScope
 from barber_booking.models.booking import OVERLAP_CONSTRAINT, occupied_range_of
@@ -132,6 +132,49 @@ class BookingRepository:
         )
         row = (await self._session.execute(statement)).scalar_one_or_none()
         return None if row is None else _to_domain(row)
+
+    async def lock_upcoming(self, master_id: MasterId, *, now: datetime) -> list[Booking]:
+        """The master's visits still ahead, held until the transaction ends.
+
+        Only those not yet started and still open: a visit under way, a
+        closed one and a cancelled one are history, not plans.
+        """
+        statement = (
+            select(BookingRow)
+            .where(
+                BookingRow.master_id == master_id,
+                BookingRow.start_at > now,
+                BookingRow.status.in_(sorted(OPEN_STATUSES)),
+            )
+            .order_by(BookingRow.start_at, BookingRow.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        rows = (await self._session.execute(statement)).scalars().all()
+        return [_to_domain(row) for row in rows]
+
+    async def save_all(self, bookings: Sequence[Booking]) -> None:
+        """Write a change of state of many bookings in one statement.
+
+        An update by primary key sent as one batch, so a cascade over a
+        master's whole horizon costs the same number of round trips as over
+        one booking.
+        """
+        if not bookings:
+            return
+        await self._session.execute(
+            update(BookingRow).execution_options(synchronize_session=False),
+            [
+                {
+                    "id": booking.id,
+                    "status": booking.status.value,
+                    "cancelled_by": booking.cancelled_by,
+                    "cancel_reason": booking.cancel_reason,
+                    "cancelled_at": booking.cancelled_at,
+                }
+                for booking in bookings
+            ],
+        )
 
     async def save(self, booking: Booking) -> Booking:
         """Write what a change of state touched, on the same row.

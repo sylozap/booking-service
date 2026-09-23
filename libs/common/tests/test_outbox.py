@@ -221,3 +221,24 @@ async def test_pending_events_survive_a_broker_outage(
 
     assert await working.run_once() == 3
     assert await count_rows(engine, published=False) == 0
+
+
+async def test_a_batch_queues_one_event_per_aggregate_with_one_cause(
+    engine: AsyncEngine, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    payloads = [booking_event() for _ in range(5)]
+    cause = uuid4()
+
+    async with unit_of_work(session_factory) as session:
+        messages = await OutboxRepository(session).add_batch(
+            topic=TOPIC,
+            aggregate_type="bookings",
+            event_type="booking.cancelled",
+            events=[(payload.booking_id, payload) for payload in payloads],
+            causation_id=cause,
+        )
+
+    assert [message.aggregate_id for message in messages] == [p.booking_id for p in payloads]
+    assert {message.causation_id for message in messages} == {cause}
+    assert len({message.id for message in messages}) == 5
+    assert await count_rows(engine, published=False) == 5
