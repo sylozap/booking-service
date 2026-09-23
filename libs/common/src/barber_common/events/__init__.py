@@ -5,6 +5,13 @@ matching is caught by mypy on both sides rather than at three in the morning
 in a consumer log.
 """
 
+from barber_common.events.bookings import (
+    BOOKING_AGGREGATE_TYPE,
+    BOOKINGS_TOPIC,
+    REMINDERS_TOPIC,
+    BookingCreated,
+    BookingEventType,
+)
 from barber_common.events.catalog import (
     CATALOG_MASTERS_TOPIC,
     CATALOG_SERVICES_TOPIC,
@@ -38,12 +45,17 @@ from barber_common.events.users import (
 
 __all__ = [
     "AUTH_USERS_TOPIC",
+    "BOOKINGS_TOPIC",
+    "BOOKING_AGGREGATE_TYPE",
     "CATALOG_MASTERS_TOPIC",
     "CATALOG_SERVICES_TOPIC",
     "ENVELOPE_VERSION",
     "MASTER_AGGREGATE_TYPE",
+    "REMINDERS_TOPIC",
     "SERVICE_AGGREGATE_TYPE",
     "USER_AGGREGATE_TYPE",
+    "BookingCreated",
+    "BookingEventType",
     "EventEnvelope",
     "JsonEnvelope",
     "MasterCreated",
