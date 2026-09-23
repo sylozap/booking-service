@@ -18,6 +18,7 @@ from barber_booking.clients.catalog import CatalogClient
 from barber_booking.services.availability import ReadAvailability
 from barber_booking.services.cache import BookingCache
 from barber_booking.services.cancel_booking import CancelBooking
+from barber_booking.services.close_visit import CloseVisit
 from barber_booking.services.create_booking import CreateBooking
 from barber_booking.services.master_settings import UpdateMasterSettings
 from barber_booking.services.reschedule_booking import RescheduleBooking
@@ -36,6 +37,7 @@ __all__ = [
     "CacheDependency",
     "CancelBookingScenario",
     "CatalogDependency",
+    "CloseVisitScenario",
     "CreateBookingScenario",
     "ListScheduleExceptionsScenario",
     "ReadAvailabilityScenario",
@@ -125,6 +127,13 @@ def build_cancel_booking(session: SessionDependency, cache: CacheDependency) -> 
 
 
 CancelBookingScenario = Annotated[CancelBooking, Depends(build_cancel_booking)]
+
+
+def build_close_visit(session: SessionDependency) -> CloseVisit:
+    return CloseVisit(session)
+
+
+CloseVisitScenario = Annotated[CloseVisit, Depends(build_close_visit)]
 
 
 def build_reschedule_booking(

@@ -14,6 +14,7 @@ from decimal import Decimal
 from barber_booking.domain.booking_status import CANCELLED_STATUSES, OPEN_STATUSES, BookingStatus
 from barber_booking.domain.errors import (
     BookingAlreadyStarted,
+    BookingNotStarted,
     BookingStatusConflict,
     CancelDeadlinePassed,
     NotAllowedForActor,
@@ -21,7 +22,11 @@ from barber_booking.domain.errors import (
 from barber_booking.domain.identifiers import BookingId, MasterId, SalonId, ServiceId, UserId
 from barber_booking.domain.time_range import TimeRange
 
-__all__ = ["Actor", "Booking", "ServiceSnapshot", "reminder_for"]
+__all__ = ["VISIT_OUTCOMES", "Actor", "Booking", "ServiceSnapshot", "reminder_for"]
+
+# What a visit that has started can turn out to be. Both keep the time taken:
+# the exclusion constraint counts them, so the past never becomes bookable.
+VISIT_OUTCOMES = frozenset({BookingStatus.COMPLETED, BookingStatus.NO_SHOW})
 
 
 def reminder_for(start_at: datetime, *, now: datetime, lead: timedelta) -> datetime | None:
@@ -244,6 +249,26 @@ class Booking:
             reminder_at=reminder_at,
             reminder_sent_at=None,
         )
+
+    def close(self, *, outcome: BookingStatus, by: Actor, now: datetime) -> Booking:
+        """Record how a visit went: the client came, or did not.
+
+        The master of the booking says so, or the salon; the client does not
+        mark their own visit. Only once it has started, and only once: a visit
+        recorded as completed is not later turned into a no-show. Recording the
+        same outcome again returns the booking as it is.
+        """
+        if outcome not in VISIT_OUTCOMES:
+            raise ValueError(f"{outcome} is not how a visit ends")
+        if not (by.is_master or by.runs_salon):
+            raise NotAllowedForActor("Only the master or the salon may close a visit")
+        if self.status is outcome:
+            return self
+        if self.status not in OPEN_STATUSES:
+            raise BookingStatusConflict(f"A booking that is {self.status} cannot be closed")
+        if not self.has_started(now):
+            raise BookingNotStarted("The visit has not started yet")
+        return replace(self, status=outcome)
 
     def _deadline_passed(self, now: datetime) -> bool:
         """Whether the client's own window for changes has closed.

@@ -10,9 +10,10 @@ from uuid import uuid4
 import pytest
 
 from barber_booking.domain.booking import Actor, Booking, ServiceSnapshot
-from barber_booking.domain.booking_status import BookingStatus
+from barber_booking.domain.booking_status import ACTIVE_STATUSES, BookingStatus
 from barber_booking.domain.errors import (
     BookingAlreadyStarted,
+    BookingNotStarted,
     BookingStatusConflict,
     CancelDeadlinePassed,
     NotAllowedForActor,
@@ -244,3 +245,70 @@ def test_moving_to_where_the_booking_already_is_changes_nothing() -> None:
     again = move(moved, now=LATER - timedelta(hours=2))
 
     assert again is moved
+
+
+# --- closing a visit --------------------------------------------------------
+
+AFTER_START = START + timedelta(minutes=10)
+OUTCOMES = [BookingStatus.COMPLETED, BookingStatus.NO_SHOW]
+
+
+@pytest.mark.parametrize("outcome", OUTCOMES)
+@pytest.mark.parametrize("actor", [AS_MASTER, AS_SALON])
+def test_the_master_or_the_salon_closes_a_visit_that_has_started(
+    outcome: BookingStatus, actor: Actor
+) -> None:
+    closed = a_booking().close(outcome=outcome, by=actor, now=AFTER_START)
+
+    assert closed.status is outcome
+
+
+def test_a_visit_is_closed_from_the_moment_it_starts() -> None:
+    closed = a_booking().close(outcome=BookingStatus.COMPLETED, by=AS_MASTER, now=START)
+
+    assert closed.status is BookingStatus.COMPLETED
+
+
+def test_a_visit_still_ahead_cannot_be_closed() -> None:
+    with pytest.raises(BookingNotStarted) as failure:
+        a_booking().close(outcome=BookingStatus.COMPLETED, by=AS_MASTER, now=hours_before(1))
+
+    assert failure.value.code == "booking_not_started"
+
+
+@pytest.mark.parametrize("actor", [AS_CLIENT, AS_STRANGER])
+def test_the_client_does_not_close_their_own_visit(actor: Actor) -> None:
+    with pytest.raises(NotAllowedForActor):
+        a_booking().close(outcome=BookingStatus.COMPLETED, by=actor, now=AFTER_START)
+
+
+def test_closing_with_the_same_outcome_again_changes_nothing() -> None:
+    closed = a_booking().close(outcome=BookingStatus.NO_SHOW, by=AS_MASTER, now=AFTER_START)
+
+    again = closed.close(outcome=BookingStatus.NO_SHOW, by=AS_SALON, now=AFTER_START)
+
+    assert again is closed
+
+
+def test_a_completed_visit_is_not_turned_into_a_no_show() -> None:
+    closed = a_booking().close(outcome=BookingStatus.COMPLETED, by=AS_MASTER, now=AFTER_START)
+
+    with pytest.raises(BookingStatusConflict):
+        closed.close(outcome=BookingStatus.NO_SHOW, by=AS_MASTER, now=AFTER_START)
+
+
+def test_a_cancelled_visit_cannot_be_closed() -> None:
+    cancelled = a_booking().cancel(by=AS_CLIENT, now=hours_before(24))
+
+    with pytest.raises(BookingStatusConflict):
+        cancelled.close(outcome=BookingStatus.COMPLETED, by=AS_SALON, now=AFTER_START)
+
+
+def test_a_closed_visit_still_holds_its_time() -> None:
+    # Both outcomes stay in the exclusion constraint: the past is not bookable.
+    assert all(outcome in ACTIVE_STATUSES for outcome in OUTCOMES)
+
+
+def test_only_an_outcome_of_a_visit_closes_it() -> None:
+    with pytest.raises(ValueError, match="how a visit ends"):
+        a_booking().close(outcome=BookingStatus.CANCELLED_BY_SALON, by=AS_SALON, now=AFTER_START)

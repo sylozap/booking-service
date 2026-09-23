@@ -11,6 +11,7 @@ from barber_common.errors import DomainError
 
 __all__ = [
     "BookingAlreadyStarted",
+    "BookingNotStarted",
     "BookingStatusConflict",
     "BookingTooFar",
     "BookingTooLate",
@@ -125,6 +126,14 @@ class BookingAlreadyStarted(DomainError):
     code = "booking_already_started"
     http_status = 422
     title = "Booking has already started"
+
+
+class BookingNotStarted(DomainError):
+    """The visit is still ahead: whether it happened cannot be said yet."""
+
+    code = "booking_not_started"
+    http_status = 422
+    title = "Booking has not started yet"
 
 
 class BookingStatusConflict(DomainError):

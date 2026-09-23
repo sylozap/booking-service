@@ -15,9 +15,11 @@ from fastapi import APIRouter, Body, Depends, status
 
 from barber_booking.api.v1.dependencies import (
     CancelBookingScenario,
+    CloseVisitScenario,
     CreateBookingScenario,
     RescheduleBookingScenario,
 )
+from barber_booking.domain.booking_status import BookingStatus
 from barber_booking.domain.identifiers import BookingId
 from barber_booking.schemas.bookings import (
     BookingCancelRequest,
@@ -171,3 +173,49 @@ async def reschedule_booking(
     Moving a booking to the start it already has answers with it as it is.
     """
     return await scenario.execute(caller=caller, booking_id=BookingId(booking_id), body=body)
+
+
+_CLOSE_RESPONSES: dict[int | str, dict[str, object]] = {
+    **_REFUSED,
+    status.HTTP_409_CONFLICT: {
+        "description": "The booking is cancelled, or its visit is already closed the other way"
+    },
+    status.HTTP_422_UNPROCESSABLE_CONTENT: {"description": "The visit has not started yet"},
+}
+
+
+@router.post(
+    "/{booking_id}/complete", summary="Mark a visit as completed", responses=_CLOSE_RESPONSES
+)
+async def complete_visit(
+    booking_id: UUID, caller: Participant, scenario: CloseVisitScenario
+) -> BookingResponse:
+    """Record that the client came and was served.
+
+    For the master of the booking and for the salon -- a `salon_admin` of
+    the salon or a `super_admin` -- once the visit has started
+    (`booking_not_started` before that). The client cannot mark their own
+    visit.
+
+    The time stays taken: a completed visit is not free time for anybody else.
+    Marking it completed again answers with it as it is; a no-show is not
+    turned into a completed visit (`409 booking_status_conflict`).
+    """
+    return await scenario.execute(
+        caller=caller, booking_id=BookingId(booking_id), outcome=BookingStatus.COMPLETED
+    )
+
+
+@router.post("/{booking_id}/no-show", summary="Mark a visit as missed", responses=_CLOSE_RESPONSES)
+async def mark_no_show(
+    booking_id: UUID, caller: Participant, scenario: CloseVisitScenario
+) -> BookingResponse:
+    """Record that the client did not come.
+
+    The same people and the same rules as for completing a visit. The time
+    stays taken: the master kept it free for the client, and it is in the
+    past.
+    """
+    return await scenario.execute(
+        caller=caller, booking_id=BookingId(booking_id), outcome=BookingStatus.NO_SHOW
+    )

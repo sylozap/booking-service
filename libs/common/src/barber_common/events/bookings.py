@@ -25,8 +25,10 @@ __all__ = [
     "BOOKING_AGGREGATE_TYPE",
     "REMINDERS_TOPIC",
     "BookingCancelled",
+    "BookingCompleted",
     "BookingCreated",
     "BookingEventType",
+    "BookingNoShow",
     "BookingRescheduled",
     "CancelledBy",
 ]
@@ -134,3 +136,26 @@ class BookingRescheduled(BaseModel):
     start_at: AwareDatetime
     end_at: AwareDatetime
     reminder_at: datetime | None = None
+
+
+class _VisitClosed(BaseModel):
+    """How a visit ended, recorded after it started."""
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    booking_id: UUID
+    salon_id: UUID
+    master_id: UUID
+    client_user_id: UUID
+
+    service_name: str
+    start_at: AwareDatetime
+    end_at: AwareDatetime
+
+
+class BookingCompleted(_VisitClosed):
+    """The client came and was served."""
+
+
+class BookingNoShow(_VisitClosed):
+    """The client did not come. The time stays taken all the same."""
