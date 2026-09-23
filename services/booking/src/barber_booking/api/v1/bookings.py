@@ -13,11 +13,16 @@ from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, status
 
-from barber_booking.api.v1.dependencies import CancelBookingScenario, CreateBookingScenario
+from barber_booking.api.v1.dependencies import (
+    CancelBookingScenario,
+    CreateBookingScenario,
+    RescheduleBookingScenario,
+)
 from barber_booking.domain.identifiers import BookingId
 from barber_booking.schemas.bookings import (
     BookingCancelRequest,
     BookingCreateRequest,
+    BookingRescheduleRequest,
     BookingResponse,
 )
 from barber_booking.services.authorization import BOOKING_ROLES
@@ -120,5 +125,49 @@ async def cancel_booking(
 
     Cancelling a cancelled booking answers with it as it is, and nothing is
     sent to the client a second time.
+    """
+    return await scenario.execute(caller=caller, booking_id=BookingId(booking_id), body=body)
+
+
+@router.post(
+    "/{booking_id}/reschedule",
+    summary="Move a booking to another time",
+    responses={
+        **_REFUSED,
+        status.HTTP_409_CONFLICT: {
+            "description": (
+                "The new time was taken while this request was in flight, or the booking "
+                "is no longer open"
+            )
+        },
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {
+            "description": (
+                "The client's deadline has passed, the visit has started, or the new time "
+                "breaks one of the salon's windows"
+            )
+        },
+        status.HTTP_503_SERVICE_UNAVAILABLE: {"description": "The catalog is not answering"},
+    },
+)
+async def reschedule_booking(
+    booking_id: UUID,
+    body: BookingRescheduleRequest,
+    caller: Participant,
+    scenario: RescheduleBookingScenario,
+) -> BookingResponse:
+    """Move a booking to another start, atomically.
+
+    The same booking at a new time: not a cancellation and a new booking. If
+    the new time is lost to somebody else, the answer is `409 slot_taken` with
+    `alternatives`, and the booking stays where it was.
+
+    Who may, and until when, is the same as for a cancellation: the client up
+    to the salon's deadline before the current start, the salon at any moment
+    before it. The new time passes the same checks as a new booking --
+    `booking_too_late`, `booking_too_far`, `slot_outside_schedule`,
+    `master_inactive`, `service_not_offered`. The service, its price and its
+    duration stay as they were booked.
+
+    Moving a booking to the start it already has answers with it as it is.
     """
     return await scenario.execute(caller=caller, booking_id=BookingId(booking_id), body=body)

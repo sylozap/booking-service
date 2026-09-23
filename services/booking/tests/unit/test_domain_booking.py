@@ -164,3 +164,83 @@ def test_a_closed_visit_cannot_be_cancelled(status: BookingStatus) -> None:
 
     with pytest.raises(BookingStatusConflict):
         closed.cancel(by=AS_SALON, now=START + timedelta(hours=2))
+
+
+# --- moving -----------------------------------------------------------------
+
+LATER = START + timedelta(hours=2)
+
+
+def move(booking: Booking, *, by: Actor = AS_CLIENT, now: datetime | None = None) -> Booking:
+    return booking.reschedule(
+        by=by,
+        now=now or hours_before(24),
+        start_at=LATER,
+        buffer_min=10,
+        reminder_at=LATER - timedelta(hours=4),
+    )
+
+
+def test_a_moved_booking_keeps_its_identity_and_its_snapshot() -> None:
+    booking = a_booking()
+
+    moved = move(booking)
+
+    assert moved.id == booking.id
+    assert moved.service == booking.service
+    assert moved.start_at == LATER
+    assert moved.end_at == LATER + timedelta(minutes=45)
+
+
+def test_a_moved_booking_takes_the_current_buffer_of_the_master() -> None:
+    moved = move(a_booking(buffer_min=0))
+
+    assert moved.buffer_min == 10
+
+
+def test_the_reminder_is_due_anew_after_a_move() -> None:
+    reminded = replace(a_booking(), reminder_sent_at=hours_before(4))
+
+    moved = move(reminded)
+
+    assert moved.reminder_at == LATER - timedelta(hours=4)
+    assert moved.reminder_sent_at is None
+
+
+def test_the_client_cannot_move_after_the_deadline() -> None:
+    with pytest.raises(CancelDeadlinePassed):
+        move(a_booking(), now=hours_before(3))
+
+
+def test_the_salon_moves_after_the_deadline() -> None:
+    moved = move(a_booking(), by=AS_SALON, now=hours_before(1))
+
+    assert moved.start_at == LATER
+
+
+@pytest.mark.parametrize("actor", [AS_MASTER, AS_STRANGER])
+def test_nobody_else_may_move(actor: Actor) -> None:
+    with pytest.raises(NotAllowedForActor):
+        move(a_booking(), by=actor)
+
+
+def test_nobody_moves_a_visit_that_has_started() -> None:
+    with pytest.raises(BookingAlreadyStarted):
+        move(a_booking(), by=AS_SALON, now=START + timedelta(minutes=5))
+
+
+def test_a_cancelled_booking_cannot_be_moved() -> None:
+    cancelled = a_booking().cancel(by=AS_CLIENT, now=hours_before(24))
+
+    with pytest.raises(BookingStatusConflict):
+        move(cancelled)
+
+
+def test_moving_to_where_the_booking_already_is_changes_nothing() -> None:
+    moved = move(a_booking())
+
+    # Two hours before the new start: past the deadline, yet a repeat of the
+    # move that already happened is not a new move.
+    again = move(moved, now=LATER - timedelta(hours=2))
+
+    assert again is moved

@@ -20,6 +20,7 @@ from barber_booking.services.cache import BookingCache
 from barber_booking.services.cancel_booking import CancelBooking
 from barber_booking.services.create_booking import CreateBooking
 from barber_booking.services.master_settings import UpdateMasterSettings
+from barber_booking.services.reschedule_booking import RescheduleBooking
 from barber_booking.services.schedule import (
     AddScheduleException,
     ListScheduleExceptions,
@@ -40,6 +41,7 @@ __all__ = [
     "ReadAvailabilityScenario",
     "ReadWeeklyScheduleScenario",
     "RemoveScheduleExceptionScenario",
+    "RescheduleBookingScenario",
     "ReplaceWeeklyScheduleScenario",
     "SessionDependency",
     "UpdateMasterSettingsScenario",
@@ -123,6 +125,24 @@ def build_cancel_booking(session: SessionDependency, cache: CacheDependency) -> 
 
 
 CancelBookingScenario = Annotated[CancelBooking, Depends(build_cancel_booking)]
+
+
+def build_reschedule_booking(
+    request: Request,
+    session: SessionDependency,
+    cache: CacheDependency,
+    catalog: CatalogDependency,
+) -> RescheduleBooking:
+    settings = request.app.state.settings
+    return RescheduleBooking(
+        session,
+        cache,
+        catalog,
+        reminder_lead=timedelta(hours=settings.reminder_lead_hours),
+    )
+
+
+RescheduleBookingScenario = Annotated[RescheduleBooking, Depends(build_reschedule_booking)]
 
 
 def build_replace_weekly_schedule(

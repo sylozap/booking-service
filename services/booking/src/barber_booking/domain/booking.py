@@ -21,7 +21,13 @@ from barber_booking.domain.errors import (
 from barber_booking.domain.identifiers import BookingId, MasterId, SalonId, ServiceId, UserId
 from barber_booking.domain.time_range import TimeRange
 
-__all__ = ["Actor", "Booking", "ServiceSnapshot"]
+__all__ = ["Actor", "Booking", "ServiceSnapshot", "reminder_for"]
+
+
+def reminder_for(start_at: datetime, *, now: datetime, lead: timedelta) -> datetime | None:
+    """When to remind the client of a visit, unless that moment has already passed."""
+    reminder_at = start_at - lead
+    return reminder_at if reminder_at > now else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -187,6 +193,56 @@ class Booking:
             cancelled_by=by.user_id,
             cancelled_at=now,
             cancel_reason=reason,
+        )
+
+    def check_move(self, *, by: Actor, now: datetime, to: datetime) -> bool:
+        """Refuse a move this actor may not make now; say whether there is one to make.
+
+        The same people as for a cancellation, under the same deadline counted
+        from the current start: moving a visit is calling off its time. A
+        booking already at ``to`` has nothing to do -- a repeated request finds
+        the work done -- and that is answered before the deadline, which the
+        move itself may have brought closer.
+        """
+        if not (by.is_client or by.runs_salon):
+            raise NotAllowedForActor("Only the client or the salon may move a booking")
+        if self.status not in OPEN_STATUSES:
+            raise BookingStatusConflict(f"A booking that is {self.status} cannot be moved")
+        if to == self.start_at:
+            return False
+        if self.has_started(now):
+            raise BookingAlreadyStarted("The visit has already started")
+        if not by.runs_salon and self._deadline_passed(now):
+            raise CancelDeadlinePassed(
+                f"Moving later than {self.cancel_deadline_min} minutes before the start "
+                "is up to the salon"
+            )
+        return True
+
+    def reschedule(
+        self,
+        *,
+        by: Actor,
+        now: datetime,
+        start_at: datetime,
+        buffer_min: int,
+        reminder_at: datetime | None,
+    ) -> Booking:
+        """The same booking at another time.
+
+        The service keeps its snapshot -- name, price and duration are what the
+        client bought. The buffer is the master's current one, because it is
+        the master's time it protects. The reminder is due anew, even if the
+        old one was already sent.
+        """
+        if not self.check_move(by=by, now=now, to=start_at):
+            return self
+        return replace(
+            self,
+            start_at=start_at,
+            buffer_min=buffer_min,
+            reminder_at=reminder_at,
+            reminder_sent_at=None,
         )
 
     def _deadline_passed(self, now: datetime) -> bool:

@@ -27,6 +27,7 @@ __all__ = [
     "BookingCancelled",
     "BookingCreated",
     "BookingEventType",
+    "BookingRescheduled",
     "CancelledBy",
 ]
 
@@ -111,3 +112,25 @@ class BookingCancelled(BaseModel):
 
     cancelled_by: CancelledBy
     reason: str | None = None
+
+
+class BookingRescheduled(BaseModel):
+    """The same visit, at another time.
+
+    Both times travel, so the message can say "moved from ... to ..." without
+    the recipient having kept the first one. ``reminder_at`` is due anew.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    booking_id: UUID
+    salon_id: UUID
+    master_id: UUID
+    client_user_id: UUID
+
+    service_name: str
+    previous_start_at: AwareDatetime
+    previous_end_at: AwareDatetime
+    start_at: AwareDatetime
+    end_at: AwareDatetime
+    reminder_at: datetime | None = None

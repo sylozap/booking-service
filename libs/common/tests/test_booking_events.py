@@ -15,6 +15,7 @@ from barber_common.events.bookings import (
     BookingCancelled,
     BookingCreated,
     BookingEventType,
+    BookingRescheduled,
     CancelledBy,
 )
 
@@ -66,7 +67,7 @@ def test_a_field_added_by_a_newer_producer_is_ignored() -> None:
     assert event.service_name == "Haircut"
 
 
-@pytest.mark.parametrize("payload", [BookingCreated, BookingCancelled])
+@pytest.mark.parametrize("payload", [BookingCreated, BookingCancelled, BookingRescheduled])
 def test_the_payload_carries_no_contact_details(payload: type[BaseModel]) -> None:
     # Who the client is reachable at belongs to auth, and notification keeps
     # its own table of recipients.
@@ -92,3 +93,22 @@ def test_a_cancellation_says_which_side_called_it_off() -> None:
 
     assert document["cancelled_by"] == "salon"
     assert document["reason"] == "master_deactivated"
+
+
+def test_a_move_carries_both_the_old_time_and_the_new_one() -> None:
+    later = START_AT + timedelta(days=1)
+    event = BookingRescheduled(
+        booking_id=uuid4(),
+        salon_id=uuid4(),
+        master_id=uuid4(),
+        client_user_id=uuid4(),
+        service_name="Haircut",
+        previous_start_at=START_AT,
+        previous_end_at=START_AT + timedelta(minutes=45),
+        start_at=later,
+        end_at=later + timedelta(minutes=45),
+    )
+
+    restored = BookingRescheduled.model_validate_json(event.model_dump_json())
+
+    assert (restored.previous_start_at, restored.start_at) == (START_AT, later)

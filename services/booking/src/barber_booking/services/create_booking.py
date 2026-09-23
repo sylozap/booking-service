@@ -13,7 +13,7 @@ answers that at the moment of the insert, and a violation becomes
 
 from __future__ import annotations
 
-from datetime import datetime, time, timedelta
+from datetime import datetime, timedelta
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -21,8 +21,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from barber_booking.clients.catalog import CatalogClient
-from barber_booking.domain.booking import Booking, ServiceSnapshot
-from barber_booking.domain.errors import MasterInactive, SlotAlreadyTaken
+from barber_booking.domain.booking import Booking, ServiceSnapshot, reminder_for
+from barber_booking.domain.errors import MasterInactive
 from barber_booking.domain.identifiers import BookingId, MasterId, SalonId, ServiceId, UserId
 from barber_booking.domain.policies import (
     validate_horizon,
@@ -31,12 +31,12 @@ from barber_booking.domain.policies import (
 )
 from barber_booking.domain.schedule import working_intervals
 from barber_booking.domain.time_range import TimeRange
-from barber_booking.metrics import BOOKING_CONFLICTS, BOOKINGS_CREATED
-from barber_booking.repositories.availability import AvailabilityRepository
+from barber_booking.metrics import BOOKINGS_CREATED
 from barber_booking.repositories.bookings import BookingRepository, is_overlap
 from barber_booking.repositories.master_settings import MasterSettingsRepository
 from barber_booking.repositories.schedule import ScheduleRepository
 from barber_booking.schemas.bookings import BookingCreateRequest, BookingResponse
+from barber_booking.services.alternatives import SlotTaken
 from barber_booking.services.booking_response import booking_response
 from barber_booking.services.cache import BookingCache
 from barber_booking.services.clock import Clock, utc_now
@@ -68,12 +68,6 @@ IDEMPOTENCY_CONSTRAINT = "pk_idempotency_keys"
 
 DEFAULT_REMINDER_LEAD = timedelta(hours=4)
 
-# How many free starts a conflict offers instead, and how far ahead they are
-# looked for. Three is what a client can choose between; a week is long enough
-# that a busy evening still has an answer.
-ALTERNATIVES_LIMIT = 3
-ALTERNATIVES_DAYS = 7
-
 
 class CreateBooking:
     """Book one master for one service at one moment."""
@@ -92,7 +86,7 @@ class CreateBooking:
         self._masters = MasterSettingsRepository(session)
         self._schedule = ScheduleRepository(session)
         self._bookings = BookingRepository(session)
-        self._availability = AvailabilityRepository(session)
+        self._slot_taken = SlotTaken(session)
         self._outbox = OutboxRepository(session)
         self._idempotency = IdempotencyRepository(session, ttl=idempotency_ttl)
         self._offerings = ReadOffering(catalog, cache)
@@ -142,11 +136,11 @@ class CreateBooking:
                 # A unique violation is something else entirely, and reporting
                 # it as a taken slot would hide a real defect.
                 raise
-            raise await self._slot_taken(
+            raise await self._slot_taken.execute(
                 master_id=master_id,
-                body=body,
+                wanted=body.start_at,
+                duration_min=offering.duration_min,
                 offering=offering,
-                zone=zone,
                 now=now,
             ) from error
 
@@ -191,7 +185,7 @@ class CreateBooking:
                     client_user_id=client_user_id,
                     buffer_min=buffer_min,
                     offering=offering,
-                    reminder_at=self._reminder_for(body.start_at, now),
+                    reminder_at=reminder_for(body.start_at, now=now, lead=self._reminder_lead),
                 )
             )
             response = booking_response(booking)
@@ -224,11 +218,6 @@ class CreateBooking:
             zone,
         )
 
-    def _reminder_for(self, start_at: datetime, now: datetime) -> datetime | None:
-        """When to remind the client, unless that moment has already passed."""
-        reminder_at = start_at - self._reminder_lead
-        return reminder_at if reminder_at > now else None
-
     async def _answer_already_given(
         self,
         client_user_id: UserId,
@@ -242,67 +231,6 @@ class CreateBooking:
         if stored is None:  # pragma: no cover - the winner commits before it releases the key
             raise error
         return BookingResponse.model_validate(stored.body)
-
-    async def _slot_taken(
-        self,
-        *,
-        master_id: MasterId,
-        body: BookingCreateRequest,
-        offering: MasterServiceDetails,
-        zone: ZoneInfo,
-        now: datetime,
-    ) -> SlotAlreadyTaken:
-        """The answer to losing the race, with somewhere else to go.
-
-        The alternatives are read after the rollback, so they already account
-        for the booking that won. An empty list is a valid answer -- the week
-        ahead can genuinely be full -- and the client is told no more than that.
-        """
-        BOOKING_CONFLICTS.labels(salon=str(offering.salon_id)).inc()
-        alternatives = await self._nearest_free(
-            master_id=master_id, body=body, offering=offering, zone=zone, now=now
-        )
-        return SlotAlreadyTaken(
-            "This time has just been taken",
-            extra={"alternatives": [start.isoformat() for start in alternatives]},
-        )
-
-    async def _nearest_free(
-        self,
-        *,
-        master_id: MasterId,
-        body: BookingCreateRequest,
-        offering: MasterServiceDetails,
-        zone: ZoneInfo,
-        now: datetime,
-    ) -> list[datetime]:
-        """A few free starts from the requested moment on.
-
-        The same query availability answers with, so the client is offered
-        exactly what it would see if it asked again.
-        """
-        first_day = body.start_at.astimezone(zone).date()
-        async with transaction(self._session):
-            settings = await self._masters.get(master_id)
-            slots = await self._availability.slots(
-                master_id=master_id,
-                date_from=first_day,
-                date_to=first_day + timedelta(days=ALTERNATIVES_DAYS),
-                timezone=offering.salon.timezone,
-                duration_min=offering.duration_min,
-                buffer_min=settings.buffer_after_min if settings is not None else 0,
-                step_min=offering.salon.slot_step_min,
-                # From the moment that was asked for, never earlier: a client
-                # who wanted the evening is not offered the morning.
-                not_before=max(
-                    body.start_at,
-                    now + timedelta(minutes=offering.salon.booking_min_lead_min),
-                ),
-                not_after=_horizon_ends(offering, now, zone),
-            )
-
-        ordered = [start for day in sorted(slots) for start in slots[day]]
-        return ordered[:ALTERNATIVES_LIMIT]
 
 
 def _booking_of(
@@ -349,9 +277,3 @@ def _event_of(booking: Booking) -> BookingCreated:
         status=booking.status.value,
         reminder_at=booking.reminder_at,
     )
-
-
-def _horizon_ends(offering: MasterServiceDetails, now: datetime, zone: ZoneInfo) -> datetime:
-    """The instant the salon's booking horizon closes."""
-    last_date = now.astimezone(zone).date() + timedelta(days=offering.salon.booking_horizon_days)
-    return datetime.combine(last_date + timedelta(days=1), time(), tzinfo=zone)

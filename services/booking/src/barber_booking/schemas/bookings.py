@@ -8,7 +8,12 @@ from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
-__all__ = ["BookingCancelRequest", "BookingCreateRequest", "BookingResponse"]
+__all__ = [
+    "BookingCancelRequest",
+    "BookingCreateRequest",
+    "BookingRescheduleRequest",
+    "BookingResponse",
+]
 
 MAX_REASON_LENGTH = 500
 
@@ -65,4 +70,14 @@ class BookingCancelRequest(BaseModel):
         default=None,
         max_length=MAX_REASON_LENGTH,
         description="Free text passed on to the other side.",
+    )
+
+
+class BookingRescheduleRequest(BaseModel):
+    """The new start of a booking. Nothing else about it changes."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    start_at: AwareDatetime = Field(
+        description="RFC 3339 with an offset. Has to be one of the starts availability offers."
     )
