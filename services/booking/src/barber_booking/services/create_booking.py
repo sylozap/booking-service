@@ -30,6 +30,7 @@ from barber_booking.domain.policies import (
 )
 from barber_booking.domain.schedule import working_intervals
 from barber_booking.domain.time_range import TimeRange
+from barber_booking.metrics import BOOKING_CONFLICTS, BOOKINGS_CREATED
 from barber_booking.models.booking import OVERLAP_CONSTRAINT, Booking
 from barber_booking.repositories.availability import AvailabilityRepository
 from barber_booking.repositories.bookings import BookingRepository
@@ -154,6 +155,7 @@ class CreateBooking:
             ) from error
 
         if created:
+            BOOKINGS_CREATED.labels(salon=str(response.salon_id), status=response.status).inc()
             # After the commit: the day of this master has changed, and the
             # cached availability of it must not outlive the booking.
             await self._cache.invalidate_master(master_id)
@@ -260,6 +262,7 @@ class CreateBooking:
         for the booking that won. An empty list is a valid answer -- the week
         ahead can genuinely be full -- and the client is told no more than that.
         """
+        BOOKING_CONFLICTS.labels(salon=str(offering.salon_id)).inc()
         alternatives = await self._nearest_free(
             master_id=master_id, body=body, offering=offering, zone=zone, now=now
         )

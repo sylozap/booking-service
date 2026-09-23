@@ -11,6 +11,7 @@ in the database.
 
 from __future__ import annotations
 
+import time as clock
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
@@ -18,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from barber_booking.clients.catalog import CatalogClient
 from barber_booking.domain.identifiers import MasterId, ServiceId
+from barber_booking.metrics import AVAILABILITY_DURATION, AvailabilitySource
 from barber_booking.repositories.availability import AvailabilityRepository
 from barber_booking.repositories.master_settings import MasterSettingsRepository
 from barber_booking.schemas.availability import AvailabilityResponse, DayAvailability
@@ -70,6 +72,7 @@ class ReadAvailability:
         The call to ``catalog`` happens before any transaction opens: it is a
         network call, and holding a pooled connection across one is forbidden.
         """
+        started = clock.monotonic()
         last = date_to or date_from
         _validate_window(date_from, last)
 
@@ -88,7 +91,7 @@ class ReadAvailability:
             return _response(offering, {}, days)
 
         bounded = [day for day in days if _within_horizon(day, offering, now, zone)]
-        slots = await self._slots(
+        slots, queried = await self._slots(
             master_id=master_id,
             service_id=service_id,
             days=bounded,
@@ -97,6 +100,8 @@ class ReadAvailability:
             now=now,
             zone=zone,
         )
+        source = AvailabilitySource.DATABASE if queried else AvailabilitySource.CACHE
+        AVAILABILITY_DURATION.labels(source=source).observe(clock.monotonic() - started)
         return _response(offering, slots, days)
 
     async def _slots(
@@ -109,8 +114,12 @@ class ReadAvailability:
         buffer_min: int,
         now: datetime,
         zone: ZoneInfo,
-    ) -> dict[date, list[datetime]]:
-        """Read what is cached and compute the rest in one query."""
+    ) -> tuple[dict[date, list[datetime]], bool]:
+        """Read what is cached and compute the rest in one query.
+
+        Also reports whether the database was read at all, which is what the
+        duration is labelled by.
+        """
         found: dict[date, list[datetime]] = {}
         missing: list[date] = []
         for day in days:
@@ -122,7 +131,7 @@ class ReadAvailability:
                 found[day] = cached.slots
 
         if not missing:
-            return found
+            return found, False
 
         # One query over the span the misses cover, rather than one per day:
         # the days in between are usually missing too, and a second round trip
@@ -145,7 +154,7 @@ class ReadAvailability:
                 DayAvailability(date=day, slots=slots),
                 ttl_seconds=self._cache_ttl_seconds,
             )
-        return found
+        return found, True
 
     async def _query(
         self,
