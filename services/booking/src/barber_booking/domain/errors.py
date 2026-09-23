@@ -10,12 +10,16 @@ from __future__ import annotations
 from barber_common.errors import DomainError
 
 __all__ = [
+    "BookingTooFar",
+    "BookingTooLate",
     "ConflictingExceptions",
     "DateInThePast",
     "MasterInactive",
     "MasterNotFound",
     "OverlappingWorkingHours",
     "ServiceNotOffered",
+    "SlotAlreadyTaken",
+    "SlotOutsideSchedule",
 ]
 
 
@@ -65,3 +69,39 @@ class DateInThePast(DomainError):
     code = "validation_error"
     http_status = 422
     title = "Date is in the past"
+
+
+class BookingTooLate(DomainError):
+    """The start is closer than the salon's minimum notice."""
+
+    code = "booking_too_late"
+    http_status = 422
+    title = "Booking is too close to its start"
+
+
+class BookingTooFar(DomainError):
+    """The start is further ahead than the salon's horizon."""
+
+    code = "booking_too_far"
+    http_status = 422
+    title = "Booking is too far ahead"
+
+
+class SlotOutsideSchedule(DomainError):
+    """The master does not work then, or the start is off the grid."""
+
+    code = "slot_outside_schedule"
+    http_status = 422
+    title = "Time is outside the working schedule"
+
+
+class SlotAlreadyTaken(DomainError):
+    """Somebody else committed first.
+
+    ``409`` and not ``422``: the request was good, and a moment earlier it
+    would have succeeded. ``alternatives`` carries the nearest free starts.
+    """
+
+    code = "slot_taken"
+    http_status = 409
+    title = "Slot is already taken"

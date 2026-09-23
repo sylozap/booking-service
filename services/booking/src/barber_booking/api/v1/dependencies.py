@@ -7,6 +7,7 @@ the request's session and the running service's cache.
 
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import Annotated
 
 from fastapi import Depends
@@ -16,6 +17,7 @@ from starlette.requests import Request
 from barber_booking.clients.catalog import CatalogClient
 from barber_booking.services.availability import ReadAvailability
 from barber_booking.services.cache import BookingCache
+from barber_booking.services.create_booking import CreateBooking
 from barber_booking.services.master_settings import UpdateMasterSettings
 from barber_booking.services.schedule import (
     AddScheduleException,
@@ -31,6 +33,7 @@ __all__ = [
     "AddScheduleExceptionScenario",
     "CacheDependency",
     "CatalogDependency",
+    "CreateBookingScenario",
     "ListScheduleExceptionsScenario",
     "ReadAvailabilityScenario",
     "ReadWeeklyScheduleScenario",
@@ -92,6 +95,25 @@ def build_read_availability(
 
 
 ReadAvailabilityScenario = Annotated[ReadAvailability, Depends(build_read_availability)]
+
+
+def build_create_booking(
+    request: Request,
+    session: SessionDependency,
+    cache: CacheDependency,
+    catalog: CatalogDependency,
+) -> CreateBooking:
+    settings = request.app.state.settings
+    return CreateBooking(
+        session,
+        cache,
+        catalog,
+        idempotency_ttl=timedelta(hours=settings.idempotency_ttl_hours),
+        reminder_lead=timedelta(hours=settings.reminder_lead_hours),
+    )
+
+
+CreateBookingScenario = Annotated[CreateBooking, Depends(build_create_booking)]
 
 
 def build_replace_weekly_schedule(
