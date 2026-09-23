@@ -329,6 +329,7 @@ def _booking_of(
         currency=offering.currency,
         duration_min=offering.duration_min,
         buffer_min=buffer_min,
+        cancel_deadline_min=offering.salon.cancel_deadline_min,
         start_at=body.start_at,
         end_at=body.start_at + timedelta(minutes=offering.duration_min),
         # Confirmed at once: pending exists for a prepayment step the platform

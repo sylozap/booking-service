@@ -77,6 +77,39 @@ async def test_every_index_of_bookings_is_present(dsn: str, migrations_engine: A
     } <= await index_names(migrations_engine, "bookings")
 
 
+async def check_names(engine: AsyncEngine, table: str) -> set[str]:
+    async with engine.connect() as connection:
+        checks = await connection.run_sync(lambda sync: inspect(sync).get_check_constraints(table))
+    return {str(check["name"]) for check in checks}
+
+
+async def column_names(engine: AsyncEngine, table: str) -> set[str]:
+    async with engine.connect() as connection:
+        columns = await connection.run_sync(lambda sync: inspect(sync).get_columns(table))
+    return {str(column["name"]) for column in columns}
+
+
+async def test_the_cancel_deadline_is_kept_with_the_booking(
+    dsn: str, migrations_engine: AsyncEngine
+) -> None:
+    await upgrade(dsn)
+
+    assert "cancel_deadline_min" in await column_names(migrations_engine, "bookings")
+    assert "ck_bookings_cancel_deadline_min_not_negative" in await check_names(
+        migrations_engine, "bookings"
+    )
+
+
+async def test_the_cancel_deadline_downgrades_away(
+    dsn: str, migrations_engine: AsyncEngine
+) -> None:
+    await upgrade(dsn)
+
+    await downgrade(dsn, "0003_idempotency_keys")
+
+    assert "cancel_deadline_min" not in await column_names(migrations_engine, "bookings")
+
+
 async def test_downgrade_removes_the_booking_tables(
     dsn: str, migrations_engine: AsyncEngine
 ) -> None:
