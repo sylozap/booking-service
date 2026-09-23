@@ -15,6 +15,7 @@ from itertools import groupby
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from barber_booking.clients.catalog import CatalogClient
 from barber_booking.domain.errors import MasterNotFound
 from barber_booking.domain.identifiers import ExceptionId, MasterId
 from barber_booking.domain.master import MasterSettings
@@ -40,6 +41,7 @@ from barber_booking.schemas.schedule import (
 from barber_booking.services.authorization import require_schedule_access
 from barber_booking.services.cache import BookingCache
 from barber_booking.services.clock import Clock, utc_now
+from barber_booking.services.master_lifecycle import EnsureMasterSettings
 from barber_common.auth import Principal
 from barber_common.db.session import transaction
 from barber_common.errors import NotFound, ValidationFailed
@@ -102,9 +104,16 @@ def schedule_response(
 class _ScheduleScenario:
     """What every schedule scenario is built from."""
 
-    def __init__(self, session: AsyncSession, cache: BookingCache, clock: Clock = utc_now) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        cache: BookingCache,
+        catalog: CatalogClient,
+        clock: Clock = utc_now,
+    ) -> None:
         self._session = session
         self._masters = MasterSettingsRepository(session)
+        self._ensure = EnsureMasterSettings(session, catalog)
         self._schedule = ScheduleRepository(session)
         self._cache = cache
         self._clock = clock
@@ -127,6 +136,7 @@ class ReplaceWeeklySchedule(_ScheduleScenario):
         self, *, caller: Principal, master_id: MasterId, body: WeeklyScheduleRequest
     ) -> WeeklyScheduleResponse:
         """Replace the template from ``valid_from``; exceptions are not touched."""
+        await self._ensure.execute(master_id)
         async with transaction(self._session):
             master = await self._manageable(caller, master_id, lock=True)
             today = master.today(self._clock())
@@ -154,6 +164,7 @@ class ReadWeeklySchedule(_ScheduleScenario):
     """The template in force today and the versions planned after it."""
 
     async def execute(self, *, caller: Principal, master_id: MasterId) -> WeeklyScheduleResponse:
+        await self._ensure.execute(master_id)
         async with transaction(self._session):
             master = await self._manageable(caller, master_id, lock=False)
             lines = await self._schedule.templates_from(master_id, master.today(self._clock()))
@@ -166,6 +177,7 @@ class AddScheduleException(_ScheduleScenario):
     async def execute(
         self, *, caller: Principal, master_id: MasterId, body: ScheduleExceptionRequest
     ) -> ScheduleExceptionResponse:
+        await self._ensure.execute(master_id)
         async with transaction(self._session):
             master = await self._manageable(caller, master_id, lock=True)
             validate_not_in_past(body.effective_on, today=master.today(self._clock()))
@@ -198,6 +210,7 @@ class ListScheduleExceptions(_ScheduleScenario):
         date_from: date | None,
         date_to: date | None,
     ) -> ScheduleExceptionList:
+        await self._ensure.execute(master_id)
         async with transaction(self._session):
             master = await self._manageable(caller, master_id, lock=False)
             first = date_from or master.today(self._clock())
@@ -217,6 +230,7 @@ class RemoveScheduleException(_ScheduleScenario):
     async def execute(
         self, *, caller: Principal, master_id: MasterId, exception_id: ExceptionId
     ) -> None:
+        await self._ensure.execute(master_id)
         async with transaction(self._session):
             master = await self._manageable(caller, master_id, lock=True)
             exception = await self._schedule.get_exception(master_id, exception_id)

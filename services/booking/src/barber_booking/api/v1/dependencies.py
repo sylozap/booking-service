@@ -170,39 +170,39 @@ RescheduleBookingScenario = Annotated[RescheduleBooking, Depends(build_reschedul
 
 
 def build_replace_weekly_schedule(
-    session: SessionDependency, cache: CacheDependency
+    session: SessionDependency, cache: CacheDependency, catalog: CatalogDependency
 ) -> ReplaceWeeklySchedule:
-    return ReplaceWeeklySchedule(session, cache)
+    return ReplaceWeeklySchedule(session, cache, catalog)
 
 
 def build_read_weekly_schedule(
-    session: SessionDependency, cache: CacheDependency
+    session: SessionDependency, cache: CacheDependency, catalog: CatalogDependency
 ) -> ReadWeeklySchedule:
-    return ReadWeeklySchedule(session, cache)
+    return ReadWeeklySchedule(session, cache, catalog)
 
 
 def build_add_schedule_exception(
-    session: SessionDependency, cache: CacheDependency
+    session: SessionDependency, cache: CacheDependency, catalog: CatalogDependency
 ) -> AddScheduleException:
-    return AddScheduleException(session, cache)
+    return AddScheduleException(session, cache, catalog)
 
 
 def build_list_schedule_exceptions(
-    session: SessionDependency, cache: CacheDependency
+    session: SessionDependency, cache: CacheDependency, catalog: CatalogDependency
 ) -> ListScheduleExceptions:
-    return ListScheduleExceptions(session, cache)
+    return ListScheduleExceptions(session, cache, catalog)
 
 
 def build_remove_schedule_exception(
-    session: SessionDependency, cache: CacheDependency
+    session: SessionDependency, cache: CacheDependency, catalog: CatalogDependency
 ) -> RemoveScheduleException:
-    return RemoveScheduleException(session, cache)
+    return RemoveScheduleException(session, cache, catalog)
 
 
 def build_update_master_settings(
-    session: SessionDependency, cache: CacheDependency
+    session: SessionDependency, cache: CacheDependency, catalog: CatalogDependency
 ) -> UpdateMasterSettings:
-    return UpdateMasterSettings(session, cache)
+    return UpdateMasterSettings(session, cache, catalog)
 
 
 ReplaceWeeklyScheduleScenario = Annotated[
