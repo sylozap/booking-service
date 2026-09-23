@@ -13,7 +13,7 @@ answers that at the moment of the insert, and a violation becomes
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.exc import IntegrityError
@@ -31,6 +31,7 @@ from barber_booking.domain.policies import (
 from barber_booking.domain.schedule import working_intervals
 from barber_booking.domain.time_range import TimeRange
 from barber_booking.models.booking import OVERLAP_CONSTRAINT, Booking
+from barber_booking.repositories.availability import AvailabilityRepository
 from barber_booking.repositories.bookings import BookingRepository
 from barber_booking.repositories.master_settings import MasterSettingsRepository
 from barber_booking.repositories.schedule import ScheduleRepository
@@ -70,6 +71,12 @@ IDEMPOTENCY_CONSTRAINT = "pk_idempotency_keys"
 
 DEFAULT_REMINDER_LEAD = timedelta(hours=4)
 
+# How many free starts a conflict offers instead, and how far ahead they are
+# looked for. Three is what a client can choose between; a week is long enough
+# that a busy evening still has an answer.
+ALTERNATIVES_LIMIT = 3
+ALTERNATIVES_DAYS = 7
+
 
 class CreateBooking:
     """Book one master for one service at one moment."""
@@ -88,6 +95,7 @@ class CreateBooking:
         self._masters = MasterSettingsRepository(session)
         self._schedule = ScheduleRepository(session)
         self._bookings = BookingRepository(session)
+        self._availability = AvailabilityRepository(session)
         self._outbox = OutboxRepository(session)
         self._idempotency = IdempotencyRepository(session, ttl=idempotency_ttl)
         self._offerings = ReadOffering(catalog, cache)
@@ -133,7 +141,17 @@ class CreateBooking:
                 # A second request with the same key got here first. Its answer
                 # is the one this caller asked for.
                 return await self._answer_already_given(client_user_id, request, now, error)
-            raise self._translated(error) from error
+            if not _is_overlap(error):
+                # A unique violation is something else entirely, and reporting
+                # it as a taken slot would hide a real defect.
+                raise
+            raise await self._slot_taken(
+                master_id=master_id,
+                body=body,
+                offering=offering,
+                zone=zone,
+                now=now,
+            ) from error
 
         if created:
             # After the commit: the day of this master has changed, and the
@@ -227,18 +245,65 @@ class CreateBooking:
             raise error
         return BookingResponse.model_validate(stored.body)
 
-    def _translated(self, error: IntegrityError) -> Exception:
-        """Turn the one violation that has a domain meaning into its error.
+    async def _slot_taken(
+        self,
+        *,
+        master_id: MasterId,
+        body: BookingCreateRequest,
+        offering: MasterServiceDetails,
+        zone: ZoneInfo,
+        now: datetime,
+    ) -> SlotAlreadyTaken:
+        """The answer to losing the race, with somewhere else to go.
 
-        Only this one: a unique violation is something else entirely, and
-        reporting it as a taken slot would hide a real defect.
+        The alternatives are read after the rollback, so they already account
+        for the booking that won. An empty list is a valid answer -- the week
+        ahead can genuinely be full -- and the client is told no more than that.
         """
-        if (
-            sqlstate_of(error) == SQLSTATE_EXCLUSION_VIOLATION
-            and constraint_name_of(error) == OVERLAP_CONSTRAINT
-        ):
-            return SlotAlreadyTaken("This time has just been taken")
-        return error
+        alternatives = await self._nearest_free(
+            master_id=master_id, body=body, offering=offering, zone=zone, now=now
+        )
+        return SlotAlreadyTaken(
+            "This time has just been taken",
+            extra={"alternatives": [start.isoformat() for start in alternatives]},
+        )
+
+    async def _nearest_free(
+        self,
+        *,
+        master_id: MasterId,
+        body: BookingCreateRequest,
+        offering: MasterServiceDetails,
+        zone: ZoneInfo,
+        now: datetime,
+    ) -> list[datetime]:
+        """A few free starts from the requested moment on.
+
+        The same query availability answers with, so the client is offered
+        exactly what it would see if it asked again.
+        """
+        first_day = body.start_at.astimezone(zone).date()
+        async with transaction(self._session):
+            settings = await self._masters.get(master_id)
+            slots = await self._availability.slots(
+                master_id=master_id,
+                date_from=first_day,
+                date_to=first_day + timedelta(days=ALTERNATIVES_DAYS),
+                timezone=offering.salon.timezone,
+                duration_min=offering.duration_min,
+                buffer_min=settings.buffer_after_min if settings is not None else 0,
+                step_min=offering.salon.slot_step_min,
+                # From the moment that was asked for, never earlier: a client
+                # who wanted the evening is not offered the morning.
+                not_before=max(
+                    body.start_at,
+                    now + timedelta(minutes=offering.salon.booking_min_lead_min),
+                ),
+                not_after=_horizon_ends(offering, now, zone),
+            )
+
+        ordered = [start for day in sorted(slots) for start in slots[day]]
+        return ordered[:ALTERNATIVES_LIMIT]
 
 
 def _booking_of(
@@ -306,3 +371,17 @@ def _event_of(booking: Booking) -> BookingCreated:
         status=booking.status,
         reminder_at=booking.reminder_at,
     )
+
+
+def _is_overlap(error: IntegrityError) -> bool:
+    """Whether this is the exclusion constraint, and not another violation."""
+    return (
+        sqlstate_of(error) == SQLSTATE_EXCLUSION_VIOLATION
+        and constraint_name_of(error) == OVERLAP_CONSTRAINT
+    )
+
+
+def _horizon_ends(offering: MasterServiceDetails, now: datetime, zone: ZoneInfo) -> datetime:
+    """The instant the salon's booking horizon closes."""
+    last_date = now.astimezone(zone).date() + timedelta(days=offering.salon.booking_horizon_days)
+    return datetime.combine(last_date + timedelta(days=1), time(), tzinfo=zone)
