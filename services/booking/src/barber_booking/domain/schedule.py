@@ -126,6 +126,10 @@ def working_intervals(
     A day off leaves nothing. Custom hours replace the template for the date.
     Breaks are cut out of whatever hours remain. Of the template lines in force
     on the date, the latest version -- the greatest ``valid_from`` -- wins.
+
+    Intervals that touch are one shift: 10:00-14:00 followed by 14:00-18:00 is
+    a working day without a pause in it, and the grid of slots runs through the
+    seam rather than starting again at it.
     """
     todays = [exception for exception in exceptions if exception.effective_on == day]
     if any(exception.kind is ExceptionKind.DAY_OFF for exception in todays):
@@ -137,7 +141,7 @@ def working_intervals(
         if exception.kind is ExceptionKind.CUSTOM_HOURS and exception.window is not None
     ] or _template_windows(day, templates)
 
-    intervals = [_unfold(day, window, zone) for window in windows]
+    intervals = _merged([_unfold(day, window, zone) for window in windows])
     for exception in todays:
         if exception.kind is ExceptionKind.BREAK and exception.window is not None:
             pause = _unfold(day, exception.window, zone)
@@ -192,6 +196,18 @@ def _template_windows(day: date, templates: Sequence[TemplateInterval]) -> list[
         return []
     latest = max(line.valid_from for line in in_force)
     return [line.window for line in in_force if line.valid_from == latest]
+
+
+def _merged(intervals: list[TimeRange]) -> list[TimeRange]:
+    """Join intervals that touch or overlap into single ranges."""
+    joined: list[TimeRange] = []
+    for interval in sorted(intervals):
+        previous = joined[-1] if joined else None
+        if previous is not None and interval.start <= previous.end:
+            joined[-1] = TimeRange(previous.start, max(previous.end, interval.end))
+        else:
+            joined.append(interval)
+    return joined
 
 
 def _unfold(day: date, window: TimeWindow, zone: ZoneInfo) -> TimeRange:

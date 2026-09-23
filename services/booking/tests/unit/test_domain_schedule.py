@@ -93,6 +93,14 @@ def test_a_day_may_have_several_intervals() -> None:
 # --- exceptions -------------------------------------------------------------
 
 
+def test_intervals_that_touch_become_one_shift() -> None:
+    lines = [template(MONDAY, time(10), time(14)), template(MONDAY, time(14), time(18))]
+
+    intervals = working_intervals(MONDAY, lines, [], MOSCOW)
+
+    assert intervals == [TimeRange(utc(MONDAY, 7), utc(MONDAY, 15))]
+
+
 def test_a_day_off_leaves_no_work() -> None:
     intervals = working_intervals(
         MONDAY,

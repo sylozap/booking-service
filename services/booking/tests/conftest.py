@@ -12,7 +12,7 @@ RSA key and points the production verifier at the public half.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from uuid import UUID, uuid4
 
@@ -26,6 +26,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from barber_booking.main import create_application
 from barber_booking.models.booking import Booking
 from barber_booking.models.master_settings import MasterSettings
+from barber_booking.models.schedule_exception import ScheduleException
+from barber_booking.models.schedule_template import ScheduleTemplate
 from barber_booking.settings import ALEMBIC_INI, BookingSettings
 from barber_common.auth import ACCESS_TOKEN_TYPE, StaticKeys, TokenVerifier, use_authentication
 from barber_common.cache import Cache, cache_from_dsn
@@ -52,6 +54,8 @@ MOSCOW = "Europe/Moscow"
 
 MasterSettingsFactory = Callable[..., Awaitable[MasterSettings]]
 BookingFactory = Callable[..., Awaitable[Booking]]
+TemplateFactory = Callable[..., Awaitable[ScheduleTemplate]]
+ExceptionFactory = Callable[..., Awaitable[ScheduleException]]
 # Builds the Authorization header of a caller holding the given roles.
 AuthorizationFactory = Callable[..., dict[str, str]]
 
@@ -250,6 +254,64 @@ async def make_master_settings(session: AsyncSession) -> MasterSettingsFactory:
             session.add(settings)
             await session.flush()
         return settings
+
+    return factory
+
+
+@pytest.fixture
+async def make_template(session: AsyncSession) -> TemplateFactory:
+    """Add one line of a weekly template, in the salon's local time."""
+
+    async def factory(
+        *,
+        master_id: UUID,
+        weekday: int,
+        start_time: time = time(10),
+        end_time: time = time(20),
+        valid_from: date = date(2020, 1, 1),
+        valid_to: date | None = None,
+    ) -> ScheduleTemplate:
+        line = ScheduleTemplate(
+            master_id=master_id,
+            weekday=weekday,
+            start_time=start_time,
+            end_time=end_time,
+            valid_from=valid_from,
+            valid_to=valid_to,
+        )
+        async with transaction(session):
+            session.add(line)
+            await session.flush()
+        return line
+
+    return factory
+
+
+@pytest.fixture
+async def make_exception(session: AsyncSession) -> ExceptionFactory:
+    """Add one exception of one date."""
+
+    async def factory(
+        *,
+        master_id: UUID,
+        effective_on: date,
+        kind: str,
+        start_time: time | None = None,
+        end_time: time | None = None,
+        reason: str | None = None,
+    ) -> ScheduleException:
+        exception = ScheduleException(
+            master_id=master_id,
+            effective_on=effective_on,
+            kind=kind,
+            start_time=start_time,
+            end_time=end_time,
+            reason=reason,
+        )
+        async with transaction(session):
+            session.add(exception)
+            await session.flush()
+        return exception
 
     return factory
 
