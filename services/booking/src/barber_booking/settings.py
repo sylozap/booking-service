@@ -30,6 +30,9 @@ class BookingSettings(BaseAppSettings):
     service_client_id: str = "booking"
     service_client_secret: SecretStr
 
+    # How long the answer to a repeated POST /api/v1/bookings is kept.
+    idempotency_ttl_hours: int = 24
+
     # Availability is cached far shorter than the catalog: it changes whenever
     # anyone books, and a minute is the staleness a client can be shown.
     availability_cache_ttl_seconds: int = 60

@@ -26,8 +26,10 @@ __all__ = [
     "MigrationSettings",
     "SchemaVersionMismatch",
     "check_schema_is_current",
+    "create_idempotency_keys",
     "create_shared_tables",
     "current_revisions",
+    "drop_idempotency_keys",
     "drop_shared_tables",
     "head_revisions",
     "load_config",
@@ -113,6 +115,33 @@ def create_shared_tables() -> None:
         # has to see the event once.
         sa.PrimaryKeyConstraint("event_id", "consumer_group", name="pk_processed_events"),
     )
+
+
+def create_idempotency_keys() -> None:
+    """Create ``idempotency_keys``.
+
+    Not part of the shared tables: only a service with a repeatable write needs
+    it, and it is created by the revision of that service. The DDL lives here
+    because the model does, and the two must not drift.
+    """
+    create_table(
+        "idempotency_keys",
+        # Scoped to the caller: two clients picking the same key are two
+        # different requests.
+        sa.Column("user_id", sa.Uuid(), nullable=False),
+        sa.Column("key", sa.String(length=255), nullable=False),
+        sa.Column("request_hash", sa.String(length=64), nullable=False),
+        sa.Column("response_status", sa.Integer(), nullable=False),
+        sa.Column("response_body", JSONB(), nullable=False),
+        sa.Column("created_at", sa.TIMESTAMP(timezone=True), nullable=False),
+        sa.Column("expires_at", sa.TIMESTAMP(timezone=True), nullable=False),
+        sa.PrimaryKeyConstraint("user_id", "key", name="pk_idempotency_keys"),
+    )
+
+
+def drop_idempotency_keys() -> None:
+    """Undo :func:`create_idempotency_keys`."""
+    drop_table("idempotency_keys")
 
 
 def drop_shared_tables() -> None:

@@ -28,7 +28,7 @@ DATABASE_NAME = "chassis_test"
 
 # Everything the shared revision creates. Truncated between the tests that
 # commit for real; the rest are isolated by a rollback and need no cleaning.
-SHARED_TABLES = ("outbox", "processed_events")
+SHARED_TABLES = ("outbox", "processed_events", "idempotency_keys")
 
 
 @pytest.fixture(scope="session")
