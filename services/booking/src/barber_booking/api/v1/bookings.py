@@ -1,17 +1,26 @@
-"""Creating a booking.
+"""Bookings: creating one, and everything that happens to it afterwards.
 
-The only endpoint of the platform that demands ``Idempotency-Key``: a client
-that retries after a lost connection must not end up with two appointments.
+Creation is the only endpoint of the platform that demands
+``Idempotency-Key``: a client that retries after a lost connection must not
+end up with two appointments. The operations on an existing booking are
+idempotent by its state -- repeating one finds the work already done.
 """
 
 from __future__ import annotations
 
 from typing import Annotated
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Body, Depends, status
 
-from barber_booking.api.v1.dependencies import CreateBookingScenario
-from barber_booking.schemas.bookings import BookingCreateRequest, BookingResponse
+from barber_booking.api.v1.dependencies import CancelBookingScenario, CreateBookingScenario
+from barber_booking.domain.identifiers import BookingId
+from barber_booking.schemas.bookings import (
+    BookingCancelRequest,
+    BookingCreateRequest,
+    BookingResponse,
+)
+from barber_booking.services.authorization import BOOKING_ROLES
 from barber_common.auth import Principal, require_roles
 from barber_common.idempotency import RequiredIdempotencyKey
 
@@ -22,6 +31,16 @@ router = APIRouter(prefix="/bookings", tags=["bookings"])
 # Everyone who registers holds this role, so the check does not narrow who may
 # book; it is what keeps the endpoint closed to a service token.
 Client = Annotated[Principal, Depends(require_roles("client"))]
+# Anyone a booking may concern. Which booking, and in what capacity, is checked
+# by the scenario once the booking is loaded.
+Participant = Annotated[Principal, Depends(require_roles(*BOOKING_ROLES))]
+
+_REFUSED: dict[int | str, dict[str, object]] = {
+    status.HTTP_403_FORBIDDEN: {
+        "description": "The booking is not the caller's, or their role does not allow this"
+    },
+    status.HTTP_404_NOT_FOUND: {"description": "No such booking"},
+}
 
 
 @router.post(
@@ -67,3 +86,39 @@ async def create_booking(
     is `409 slot_taken`.
     """
     return await scenario.execute(caller=caller, request=request, body=body)
+
+
+@router.post(
+    "/{booking_id}/cancel",
+    summary="Cancel a booking",
+    responses={
+        **_REFUSED,
+        status.HTTP_409_CONFLICT: {
+            "description": "The visit is already completed or marked as a no-show"
+        },
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {
+            "description": "The client's deadline has passed, or the visit has already started"
+        },
+    },
+)
+async def cancel_booking(
+    booking_id: UUID,
+    caller: Participant,
+    scenario: CancelBookingScenario,
+    body: Annotated[BookingCancelRequest | None, Body()] = None,
+) -> BookingResponse:
+    """Call a visit off and free its time at once.
+
+    The client of the booking cancels it up to the salon's deadline before the
+    start -- the deadline as it was when the booking was made. Later than that
+    is `cancel_deadline_passed`, and only the salon can still cancel: a
+    `salon_admin` of the salon or a `super_admin`, whose cancellation is
+    recorded as the salon's. The master of the booking cannot cancel it.
+
+    Nobody cancels a visit that has started (`booking_already_started`), and a
+    completed visit or a no-show is `409 booking_status_conflict`.
+
+    Cancelling a cancelled booking answers with it as it is, and nothing is
+    sent to the client a second time.
+    """
+    return await scenario.execute(caller=caller, booking_id=BookingId(booking_id), body=body)

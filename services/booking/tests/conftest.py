@@ -493,8 +493,10 @@ async def make_booking(session: AsyncSession) -> BookingFactory:
         buffer_min: int = 0,
         status: str = "confirmed",
         salon_id: UUID | None = None,
+        client_user_id: UUID | None = None,
+        cancel_deadline_min: int = 240,
     ) -> Booking:
-        client_id = uuid4()
+        client_id = client_user_id or uuid4()
         booking = Booking(
             salon_id=salon_id or uuid4(),
             master_id=master_id,
@@ -505,6 +507,7 @@ async def make_booking(session: AsyncSession) -> BookingFactory:
             currency="RUB",
             duration_min=duration_min,
             buffer_min=buffer_min,
+            cancel_deadline_min=cancel_deadline_min,
             start_at=start_at,
             end_at=start_at + timedelta(minutes=duration_min),
             status=status,

@@ -9,13 +9,25 @@ from uuid import uuid4
 
 import pytest
 
-from barber_booking.domain.booking import Booking, ServiceSnapshot
+from barber_booking.domain.booking import Actor, Booking, ServiceSnapshot
 from barber_booking.domain.booking_status import BookingStatus
+from barber_booking.domain.errors import (
+    BookingAlreadyStarted,
+    BookingStatusConflict,
+    CancelDeadlinePassed,
+    NotAllowedForActor,
+)
 from barber_booking.domain.identifiers import BookingId, MasterId, SalonId, ServiceId, UserId
 from barber_booking.domain.time_range import TimeRange
 
 START = datetime(2026, 10, 5, 7, 0, tzinfo=UTC)
 CLIENT = UserId(uuid4())
+ADMIN = UserId(uuid4())
+
+AS_CLIENT = Actor(user_id=CLIENT, is_client=True)
+AS_SALON = Actor(user_id=ADMIN, runs_salon=True)
+AS_MASTER = Actor(user_id=UserId(uuid4()), is_master=True)
+AS_STRANGER = Actor(user_id=UserId(uuid4()))
 
 
 def a_booking(
@@ -81,3 +93,74 @@ def test_a_negative_cancellation_deadline_is_refused() -> None:
 def test_a_service_without_a_duration_is_refused() -> None:
     with pytest.raises(ValueError, match="duration"):
         replace(a_booking().service, duration_min=0)
+
+
+# --- cancelling -------------------------------------------------------------
+
+
+def hours_before(hours: float) -> datetime:
+    return START - timedelta(hours=hours)
+
+
+def test_the_client_cancels_before_the_deadline() -> None:
+    cancelled = a_booking().cancel(by=AS_CLIENT, now=hours_before(5), reason="changed plans")
+
+    assert cancelled.status is BookingStatus.CANCELLED_BY_CLIENT
+    assert cancelled.cancelled_by == CLIENT
+    assert cancelled.cancelled_at == hours_before(5)
+    assert cancelled.cancel_reason == "changed plans"
+
+
+def test_the_client_may_still_cancel_exactly_at_the_deadline() -> None:
+    cancelled = a_booking(cancel_deadline_min=240).cancel(by=AS_CLIENT, now=hours_before(4))
+
+    assert cancelled.status is BookingStatus.CANCELLED_BY_CLIENT
+
+
+def test_the_client_cannot_cancel_after_the_deadline() -> None:
+    with pytest.raises(CancelDeadlinePassed) as failure:
+        a_booking(cancel_deadline_min=240).cancel(by=AS_CLIENT, now=hours_before(3))
+
+    assert failure.value.code == "cancel_deadline_passed"
+
+
+def test_the_salon_cancels_after_the_deadline() -> None:
+    cancelled = a_booking().cancel(by=AS_SALON, now=hours_before(1))
+
+    assert cancelled.status is BookingStatus.CANCELLED_BY_SALON
+    assert cancelled.cancelled_by == ADMIN
+
+
+def test_an_admin_cancelling_their_own_booking_is_its_client_without_the_deadline() -> None:
+    both = Actor(user_id=CLIENT, is_client=True, runs_salon=True)
+
+    cancelled = a_booking().cancel(by=both, now=hours_before(1))
+
+    assert cancelled.status is BookingStatus.CANCELLED_BY_CLIENT
+
+
+@pytest.mark.parametrize("actor", [AS_MASTER, AS_STRANGER])
+def test_nobody_else_may_cancel(actor: Actor) -> None:
+    with pytest.raises(NotAllowedForActor):
+        a_booking().cancel(by=actor, now=hours_before(5))
+
+
+def test_nobody_cancels_a_visit_that_has_started() -> None:
+    with pytest.raises(BookingAlreadyStarted):
+        a_booking().cancel(by=AS_SALON, now=START)
+
+
+def test_cancelling_again_changes_nothing() -> None:
+    cancelled = a_booking().cancel(by=AS_CLIENT, now=hours_before(5))
+
+    again = cancelled.cancel(by=AS_CLIENT, now=hours_before(4.5))
+
+    assert again is cancelled
+
+
+@pytest.mark.parametrize("status", [BookingStatus.COMPLETED, BookingStatus.NO_SHOW])
+def test_a_closed_visit_cannot_be_cancelled(status: BookingStatus) -> None:
+    closed = replace(a_booking(), status=status)
+
+    with pytest.raises(BookingStatusConflict):
+        closed.cancel(by=AS_SALON, now=START + timedelta(hours=2))

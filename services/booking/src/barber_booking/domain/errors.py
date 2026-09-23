@@ -10,12 +10,16 @@ from __future__ import annotations
 from barber_common.errors import DomainError
 
 __all__ = [
+    "BookingAlreadyStarted",
+    "BookingStatusConflict",
     "BookingTooFar",
     "BookingTooLate",
+    "CancelDeadlinePassed",
     "ConflictingExceptions",
     "DateInThePast",
     "MasterInactive",
     "MasterNotFound",
+    "NotAllowedForActor",
     "OverlappingWorkingHours",
     "ServiceNotOffered",
     "SlotAlreadyTaken",
@@ -105,3 +109,43 @@ class SlotAlreadyTaken(DomainError):
     code = "slot_taken"
     http_status = 409
     title = "Slot is already taken"
+
+
+class CancelDeadlinePassed(DomainError):
+    """Too close to the start for the client; the salon can still do it."""
+
+    code = "cancel_deadline_passed"
+    http_status = 422
+    title = "Cancellation deadline has passed"
+
+
+class BookingAlreadyStarted(DomainError):
+    """The visit has begun: it can be closed now, not moved or called off."""
+
+    code = "booking_already_started"
+    http_status = 422
+    title = "Booking has already started"
+
+
+class BookingStatusConflict(DomainError):
+    """The booking is in a state this operation cannot leave.
+
+    ``409``: the request itself is well formed, the booking has moved on --
+    a completed visit cannot be cancelled, a cancelled one cannot be completed.
+    """
+
+    code = "booking_status_conflict"
+    http_status = 409
+    title = "Booking is not in a state that allows this"
+
+
+class NotAllowedForActor(DomainError):
+    """The caller may see this booking, but not do this to it.
+
+    The same code and status as a refusal by role, whatever the reason: the
+    answer does not tell a caller which capacity they were missing.
+    """
+
+    code = "forbidden_for_role"
+    http_status = 403
+    title = "This operation is not allowed for your role"

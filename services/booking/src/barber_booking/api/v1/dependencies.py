@@ -17,6 +17,7 @@ from starlette.requests import Request
 from barber_booking.clients.catalog import CatalogClient
 from barber_booking.services.availability import ReadAvailability
 from barber_booking.services.cache import BookingCache
+from barber_booking.services.cancel_booking import CancelBooking
 from barber_booking.services.create_booking import CreateBooking
 from barber_booking.services.master_settings import UpdateMasterSettings
 from barber_booking.services.schedule import (
@@ -32,6 +33,7 @@ from barber_common.db.session import get_session
 __all__ = [
     "AddScheduleExceptionScenario",
     "CacheDependency",
+    "CancelBookingScenario",
     "CatalogDependency",
     "CreateBookingScenario",
     "ListScheduleExceptionsScenario",
@@ -114,6 +116,13 @@ def build_create_booking(
 
 
 CreateBookingScenario = Annotated[CreateBooking, Depends(build_create_booking)]
+
+
+def build_cancel_booking(session: SessionDependency, cache: CacheDependency) -> CancelBooking:
+    return CancelBooking(session, cache)
+
+
+CancelBookingScenario = Annotated[CancelBooking, Depends(build_cancel_booking)]
 
 
 def build_replace_weekly_schedule(

@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from barber_booking.domain.booking import Booking, ServiceSnapshot
 from barber_booking.domain.booking_status import BookingStatus
 from barber_booking.domain.identifiers import BookingId, MasterId, SalonId, ServiceId, UserId
-from barber_booking.models.booking import OVERLAP_CONSTRAINT
+from barber_booking.models.booking import OVERLAP_CONSTRAINT, occupied_range_of
 from barber_booking.models.booking import Booking as BookingRow
 from barber_common.db.errors import (
     SQLSTATE_EXCLUSION_VIOLATION,
@@ -96,4 +97,53 @@ class BookingRepository:
         row = _to_row(booking)
         self._session.add(row)
         await self._session.flush()
+        return _to_domain(row)
+
+    async def get(self, booking_id: BookingId) -> Booking | None:
+        row = await self._session.get(BookingRow, booking_id)
+        return None if row is None else _to_domain(row)
+
+    async def lock(self, booking_id: BookingId) -> Booking | None:
+        """Read a booking and hold it until the transaction ends.
+
+        Every change of a booking takes this lock first, so a cancellation and
+        a completion arriving together cannot both decide from the same state.
+        """
+        statement = (
+            select(BookingRow)
+            .where(BookingRow.id == booking_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        row = (await self._session.execute(statement)).scalar_one_or_none()
+        return None if row is None else _to_domain(row)
+
+    async def save(self, booking: Booking) -> Booking:
+        """Write what a change of state touched, on the same row.
+
+        An ``UPDATE`` and never a delete with an insert: a moved booking keeps
+        its identity and its history, and the exclusion constraint judges the
+        new time against every other booking but this one.
+        """
+        statement = (
+            update(BookingRow)
+            .where(BookingRow.id == booking.id)
+            .values(
+                status=booking.status.value,
+                start_at=booking.start_at,
+                end_at=booking.end_at,
+                buffer_min=booking.buffer_min,
+                occupied_range=occupied_range_of(
+                    booking.start_at, booking.end_at, booking.buffer_min
+                ),
+                cancelled_by=booking.cancelled_by,
+                cancel_reason=booking.cancel_reason,
+                cancelled_at=booking.cancelled_at,
+                reminder_at=booking.reminder_at,
+                reminder_sent_at=booking.reminder_sent_at,
+            )
+            .returning(BookingRow)
+            .execution_options(populate_existing=True)
+        )
+        row = (await self._session.execute(statement)).scalar_one()
         return _to_domain(row)

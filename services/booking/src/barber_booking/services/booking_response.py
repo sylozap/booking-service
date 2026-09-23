@@ -31,5 +31,7 @@ def booking_response(booking: Booking) -> BookingResponse:
         end_at=booking.end_at,
         status=booking.status.value,
         reminder_at=booking.reminder_at,
+        cancelled_at=booking.cancelled_at,
+        cancel_reason=booking.cancel_reason,
         created_at=booking.created_at,
     )

@@ -8,7 +8,9 @@ from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
-__all__ = ["BookingCreateRequest", "BookingResponse"]
+__all__ = ["BookingCancelRequest", "BookingCreateRequest", "BookingResponse"]
+
+MAX_REASON_LENGTH = 500
 
 
 class BookingCreateRequest(BaseModel):
@@ -48,4 +50,19 @@ class BookingResponse(BaseModel):
     status: str
     reminder_at: datetime | None
 
+    cancelled_at: datetime | None = None
+    cancel_reason: str | None = None
+
     created_at: datetime
+
+
+class BookingCancelRequest(BaseModel):
+    """Why a visit is called off. The body may be left out entirely."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str | None = Field(
+        default=None,
+        max_length=MAX_REASON_LENGTH,
+        description="Free text passed on to the other side.",
+    )
