@@ -23,6 +23,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import FastAPI
 from pydantic import SecretStr
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from barber_booking.clients.catalog import CatalogClient
@@ -36,7 +37,7 @@ from barber_booking.settings import ALEMBIC_INI, BookingSettings
 from barber_common.auth import ACCESS_TOKEN_TYPE, StaticKeys, TokenVerifier, use_authentication
 from barber_common.cache import Cache, cache_from_dsn
 from barber_common.config import Environment
-from barber_common.db import create_engine, get_session
+from barber_common.db import Database, create_engine, get_session
 from barber_common.db.session import transaction
 from barber_common.http import ServiceClient
 from barber_common.testing.fixtures import (
@@ -56,6 +57,18 @@ KID = "booking-test-key"
 TEST_KEY_SIZE_BITS = 2048
 
 MOSCOW = "Europe/Moscow"
+
+# Everything a test can write. Truncated around the tests that commit for real;
+# the rest are isolated by a rollback and need no cleaning.
+WRITTEN_TABLES = (
+    "bookings",
+    "schedule_exceptions",
+    "schedule_templates",
+    "master_settings",
+    "idempotency_keys",
+    "outbox",
+    "processed_events",
+)
 
 MasterSettingsFactory = Callable[..., Awaitable[MasterSettings]]
 BookingFactory = Callable[..., Awaitable[Booking]]
@@ -135,6 +148,7 @@ class FakeCatalog:
     """
 
     def __init__(self) -> None:
+        self.salon_id = uuid4()
         self.master_active = True
         self.duration_min = 45
         self.timezone = MOSCOW
@@ -189,7 +203,7 @@ class FakeCatalog:
     def _offering(self, master_id: str, service_id: str) -> dict[str, object]:
         return {
             "master_id": master_id,
-            "salon_id": str(uuid4()),
+            "salon_id": str(self.salon_id),
             "master_active": self.master_active,
             "service_id": service_id,
             "service_name": self.service_name,
@@ -212,19 +226,18 @@ def catalog() -> FakeCatalog:
     return FakeCatalog()
 
 
-@pytest.fixture
-def app(
+def build_app(
     settings: BookingSettings,
     session_factory: async_sessionmaker[AsyncSession],
     signing_key: rsa.RSAPrivateKey,
     catalog: FakeCatalog,
-) -> Iterator[FastAPI]:
-    """The real application, wired to the rolled back database of the test.
+) -> FastAPI:
+    """The real application, wired to the database of the test.
 
     The lifespan does not run, so what it would set up is done here: sessions
-    come from the isolated factory and the verifier trusts the suite's key.
-    ``app.state.cache`` stays unset, which the dependency reads as a disabled
-    cache.
+    come from the given factory, the verifier trusts the suite's key and the
+    catalog is the fake one. ``app.state.cache`` stays unset, which the
+    dependency reads as a disabled cache.
     """
     application = create_application(settings)
 
@@ -241,10 +254,69 @@ def app(
             issuer=ISSUER,
         ),
     )
+    return application
+
+
+@pytest.fixture
+def app(
+    settings: BookingSettings,
+    session_factory: async_sessionmaker[AsyncSession],
+    signing_key: rsa.RSAPrivateKey,
+    catalog: FakeCatalog,
+) -> Iterator[FastAPI]:
+    """The application over sessions whose writes are rolled back."""
+    application = build_app(settings, session_factory, signing_key, catalog)
 
     yield application
 
     application.dependency_overrides.clear()
+
+
+@pytest.fixture
+async def concurrent_session_factory(
+    booking_dsn: str,
+) -> AsyncIterator[async_sessionmaker[AsyncSession]]:
+    """Sessions on connections of their own, cleaned up by truncating.
+
+    Savepoints on one connection are not two transactions, so anything about
+    what happens when two requests run side by side needs these.
+    """
+    engine = create_engine(booking_dsn, pool_size=25, max_overflow=5)
+    await _truncate(engine)
+
+    yield Database(engine).session_factory
+
+    await _truncate(engine)
+    await engine.dispose()
+
+
+@pytest.fixture
+async def concurrent_session(
+    concurrent_session_factory: async_sessionmaker[AsyncSession],
+) -> AsyncIterator[AsyncSession]:
+    """One session that really commits."""
+    async with concurrent_session_factory() as session:
+        yield session
+
+
+@pytest.fixture
+def concurrent_app(
+    settings: BookingSettings,
+    concurrent_session_factory: async_sessionmaker[AsyncSession],
+    signing_key: rsa.RSAPrivateKey,
+    catalog: FakeCatalog,
+) -> Iterator[FastAPI]:
+    """The application over real connections, for tests about concurrency."""
+    application = build_app(settings, concurrent_session_factory, signing_key, catalog)
+
+    yield application
+
+    application.dependency_overrides.clear()
+
+
+async def _truncate(engine: AsyncEngine) -> None:
+    async with engine.begin() as connection:
+        await connection.execute(text(f"TRUNCATE {', '.join(WRITTEN_TABLES)} CASCADE"))
 
 
 def public_pem(key: rsa.RSAPrivateKey) -> str:
