@@ -15,6 +15,7 @@ Redis. What is left behind under an old generation expires by TTL.
 
 from __future__ import annotations
 
+from datetime import date
 from uuid import UUID
 
 from pydantic import BaseModel, ValidationError
@@ -64,9 +65,18 @@ class BookingCache:
 
     async def offering_key(self, master_id: MasterId, service_id: ServiceId) -> str:
         """Key of the answer of ``catalog`` about one master and one service."""
-        master = await self._generation(_master_generation_key(master_id))
-        service = await self._generation(_service_generation_key(service_id))
-        return f"{KEY_PREFIX}:offering:{master_id}:{service_id}:{master}.{service}"
+        stamp = await self._stamp(master_id, service_id)
+        return f"{KEY_PREFIX}:offering:{master_id}:{service_id}:{stamp}"
+
+    async def availability_key(self, master_id: MasterId, service_id: ServiceId, day: date) -> str:
+        """Key of the free starts of one date.
+
+        One key per date rather than per requested range: a client scrolling a
+        calendar asks for overlapping ranges, and per-range keys would share
+        nothing between them.
+        """
+        stamp = await self._stamp(master_id, service_id)
+        return f"{KEY_PREFIX}:avail:{master_id}:{service_id}:{day.isoformat()}:{stamp}"
 
     async def invalidate_master(self, master_id: MasterId) -> None:
         """Make every key about this master unreachable."""
@@ -75,6 +85,12 @@ class BookingCache:
     async def invalidate_service(self, service_id: ServiceId) -> None:
         """Make every key about this service unreachable, for every master."""
         await self._cache.increment(_service_generation_key(service_id))
+
+    async def _stamp(self, master_id: MasterId, service_id: ServiceId) -> str:
+        """The pair of generations every key about this pair carries."""
+        master = await self._generation(_master_generation_key(master_id))
+        service = await self._generation(_service_generation_key(service_id))
+        return f"{master}.{service}"
 
     async def _generation(self, key: str) -> int:
         raw = await self._cache.get(key)

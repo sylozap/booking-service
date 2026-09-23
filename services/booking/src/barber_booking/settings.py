@@ -29,3 +29,7 @@ class BookingSettings(BaseAppSettings):
     # The client credentials booking exchanges for a service token in auth.
     service_client_id: str = "booking"
     service_client_secret: SecretStr
+
+    # Availability is cached far shorter than the catalog: it changes whenever
+    # anyone books, and a minute is the staleness a client can be shown.
+    availability_cache_ttl_seconds: int = 60

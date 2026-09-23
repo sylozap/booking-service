@@ -13,6 +13,8 @@ from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import Request
 
+from barber_booking.clients.catalog import CatalogClient
+from barber_booking.services.availability import ReadAvailability
 from barber_booking.services.cache import BookingCache
 from barber_booking.services.master_settings import UpdateMasterSettings
 from barber_booking.services.schedule import (
@@ -28,7 +30,9 @@ from barber_common.db.session import get_session
 __all__ = [
     "AddScheduleExceptionScenario",
     "CacheDependency",
+    "CatalogDependency",
     "ListScheduleExceptionsScenario",
+    "ReadAvailabilityScenario",
     "ReadWeeklyScheduleScenario",
     "RemoveScheduleExceptionScenario",
     "ReplaceWeeklyScheduleScenario",
@@ -52,6 +56,42 @@ def get_booking_cache(request: Request) -> BookingCache:
 
 
 CacheDependency = Annotated[BookingCache, Depends(get_booking_cache)]
+
+
+def get_catalog_client(request: Request) -> CatalogClient:
+    """The client of ``catalog`` the service built at startup.
+
+    Unlike the cache, there is no working without it: availability and a new
+    booking both need the duration and the policies it carries.
+    """
+    catalog = getattr(request.app.state, "catalog", None)
+    if not isinstance(catalog, CatalogClient):
+        raise RuntimeError(
+            "application state has no catalog client: "
+            "build one in the lifespan before serving requests"
+        )
+    return catalog
+
+
+CatalogDependency = Annotated[CatalogClient, Depends(get_catalog_client)]
+
+
+def build_read_availability(
+    request: Request,
+    session: SessionDependency,
+    cache: CacheDependency,
+    catalog: CatalogDependency,
+) -> ReadAvailability:
+    settings = request.app.state.settings
+    return ReadAvailability(
+        session,
+        cache,
+        catalog,
+        cache_ttl_seconds=settings.availability_cache_ttl_seconds,
+    )
+
+
+ReadAvailabilityScenario = Annotated[ReadAvailability, Depends(build_read_availability)]
 
 
 def build_replace_weekly_schedule(

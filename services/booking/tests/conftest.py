@@ -16,13 +16,17 @@ from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from uuid import UUID, uuid4
 
+import httpx
 import jwt
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import FastAPI
+from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from barber_booking.clients.catalog import CatalogClient
+from barber_booking.clients.service_token import ServiceTokenProvider
 from barber_booking.main import create_application
 from barber_booking.models.booking import Booking
 from barber_booking.models.master_settings import MasterSettings
@@ -34,6 +38,7 @@ from barber_common.cache import Cache, cache_from_dsn
 from barber_common.config import Environment
 from barber_common.db import create_engine, get_session
 from barber_common.db.session import transaction
+from barber_common.http import ServiceClient
 from barber_common.testing.fixtures import (
     apply_migrations,
     create_database,
@@ -121,11 +126,98 @@ async def session(
         yield session
 
 
+class FakeCatalog:
+    """``catalog`` and ``auth`` as the booking service sees them.
+
+    A transport rather than a patched client: everything between the scenario
+    and the wire -- the token, the retries, the breaker, the contract -- is the
+    code that runs in production.
+    """
+
+    def __init__(self) -> None:
+        self.master_active = True
+        self.duration_min = 45
+        self.timezone = MOSCOW
+        self.slot_step_min = 15
+        self.booking_min_lead_min = 120
+        self.booking_horizon_days = 60
+        self.cancel_deadline_min = 240
+        self.service_name = "Haircut"
+        self.price = "3500.00"
+        self.currency = "RUB"
+        # What the next read of an offering answers: 200 unless a test says
+        # otherwise. "gone" makes catalog unreachable.
+        self.answers: str = "offering"
+        self.calls = 0
+
+    def client(self) -> CatalogClient:
+        transport = httpx.MockTransport(self._handle)
+        return CatalogClient(
+            http=ServiceClient(base_url="http://catalog", upstream="catalog", transport=transport),
+            tokens=ServiceTokenProvider(
+                http=ServiceClient(base_url="http://auth", upstream="auth", transport=transport),
+                client_id="booking",
+                client_secret=SecretStr("secret"),
+            ),
+        )
+
+    def _handle(self, request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/internal/v1/token":
+            return httpx.Response(
+                200,
+                json={
+                    "access_token": "token",
+                    "token_type": "Bearer",
+                    "expires_at": (datetime.now(UTC) + timedelta(minutes=5)).isoformat(),
+                    "scopes": ["catalog:read"],
+                },
+            )
+
+        self.calls += 1
+        if self.answers == "gone":
+            raise httpx.ConnectError("connection refused")
+        if self.answers == "not_offered":
+            return httpx.Response(
+                404,
+                json={"status": 404, "code": "not_found", "detail": "no link"},
+                headers={"content-type": "application/problem+json"},
+            )
+
+        master_id, service_id = request.url.path.split("/")[-3], request.url.path.split("/")[-1]
+        return httpx.Response(200, json=self._offering(master_id, service_id))
+
+    def _offering(self, master_id: str, service_id: str) -> dict[str, object]:
+        return {
+            "master_id": master_id,
+            "salon_id": str(uuid4()),
+            "master_active": self.master_active,
+            "service_id": service_id,
+            "service_name": self.service_name,
+            "duration_min": self.duration_min,
+            "price": self.price,
+            "currency": self.currency,
+            "salon": {
+                "timezone": self.timezone,
+                "slot_step_min": self.slot_step_min,
+                "booking_min_lead_min": self.booking_min_lead_min,
+                "booking_horizon_days": self.booking_horizon_days,
+                "cancel_deadline_min": self.cancel_deadline_min,
+            },
+        }
+
+
+@pytest.fixture
+def catalog() -> FakeCatalog:
+    """The catalog this test answers with."""
+    return FakeCatalog()
+
+
 @pytest.fixture
 def app(
     settings: BookingSettings,
     session_factory: async_sessionmaker[AsyncSession],
     signing_key: rsa.RSAPrivateKey,
+    catalog: FakeCatalog,
 ) -> Iterator[FastAPI]:
     """The real application, wired to the rolled back database of the test.
 
@@ -141,6 +233,7 @@ def app(
             yield session
 
     application.dependency_overrides[get_session] = override_get_session
+    application.state.catalog = catalog.client()
     use_authentication(
         application,
         TokenVerifier(
