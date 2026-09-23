@@ -11,10 +11,17 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, status
 
-from barber_catalog.api.v1.dependencies import ReadMasterServiceDetailsScenario
+from barber_catalog.api.v1.dependencies import (
+    ReadMasterProfileScenario,
+    ReadMasterServiceDetailsScenario,
+)
 from barber_catalog.domain.identifiers import MasterId, ServiceId
 from barber_common.auth import Principal, require_service_token
-from barber_common.contracts.catalog import CATALOG_READ_SCOPE, MasterServiceDetails
+from barber_common.contracts.catalog import (
+    CATALOG_READ_SCOPE,
+    MasterProfile,
+    MasterServiceDetails,
+)
 
 __all__ = ["router"]
 
@@ -53,3 +60,26 @@ async def read_master_service_details(
         master_id=MasterId(master_id),
         service_id=ServiceId(service_id),
     )
+
+
+@router.get(
+    "/masters/{master_id}",
+    summary="Who a master is: account, salon and time zone",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: {"description": "A service token is required"},
+        status.HTTP_403_FORBIDDEN: {"description": "The token does not carry catalog:read"},
+        status.HTTP_404_NOT_FOUND: {"description": "No such master"},
+    },
+)
+async def read_master_profile(
+    master_id: UUID,
+    caller: InternalCaller,
+    scenario: ReadMasterProfileScenario,
+) -> MasterProfile:
+    """The facts `master.created` carries, as they stand now.
+
+    For `booking`, which reads it once for a master whose `master.created` it
+    never received. A deactivated master is described too, with `is_active`
+    false.
+    """
+    return await scenario.execute(master_id=MasterId(master_id))

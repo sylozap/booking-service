@@ -20,6 +20,7 @@ from barber_catalog.services.catalog_services import (
     ReadService,
     UpdateService,
 )
+from barber_catalog.services.master_profile import ReadMasterProfile
 from barber_catalog.services.master_service_details import ReadMasterServiceDetails
 from barber_catalog.services.master_services import (
     LinkMasterService,
@@ -50,6 +51,7 @@ __all__ = [
     "ListSalonServicesScenario",
     "ListSalonsScenario",
     "ReadMasterCardScenario",
+    "ReadMasterProfileScenario",
     "ReadMasterServiceDetailsScenario",
     "ReadSalonScenario",
     "ReadServiceScenario",
@@ -202,3 +204,10 @@ def build_read_master_service_details(
 ReadMasterServiceDetailsScenario = Annotated[
     ReadMasterServiceDetails, Depends(build_read_master_service_details)
 ]
+
+
+def build_read_master_profile(session: SessionDependency) -> ReadMasterProfile:
+    return ReadMasterProfile(session)
+
+
+ReadMasterProfileScenario = Annotated[ReadMasterProfile, Depends(build_read_master_profile)]
