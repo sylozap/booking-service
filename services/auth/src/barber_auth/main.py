@@ -12,7 +12,6 @@ from fastapi import FastAPI
 
 from barber_auth.adapters.argon2_hasher import Argon2Hasher
 from barber_auth.adapters.database_keys import DatabaseKeys
-from barber_auth.adapters.dev_mailer import DevMailer
 from barber_auth.adapters.rsa_signer import RsaTokenSigner
 from barber_auth.api.v1 import jwks, service_tokens
 from barber_auth.api.v1.router import router
@@ -118,7 +117,3 @@ def install_dependencies(app: FastAPI, settings: AuthSettings) -> None:
     """
     app.state.password_hasher = Argon2Hasher(settings)
     app.state.signer = RsaTokenSigner(settings.signing_key_pem())
-    app.state.mailer = DevMailer(
-        environment=settings.environment,
-        confirmation_url=settings.email_confirmation_url,
-    )

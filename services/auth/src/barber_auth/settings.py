@@ -54,9 +54,6 @@ class AuthSettings(BaseAppSettings):
     # --- email confirmation ------------------------------------------------
     # The confirmation link is valid for a day.
     email_confirmation_ttl_hours: int = 24
-    # Where the link in the letter points. The frontend page that reads the
-    # token out of the query string and posts it to /api/v1/auth/confirm-email.
-    email_confirmation_url: str = "http://localhost:8080/confirm-email"
 
     # --- signing keys ------------------------------------------------------
     # The RS256 private key, given either as a file path (a mounted Kubernetes

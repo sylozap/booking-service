@@ -7,7 +7,6 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from barber_auth.adapters.argon2_hasher import Argon2Hasher
-from barber_auth.adapters.dev_mailer import DevMailer
 from barber_auth.models.email_confirmation import EmailConfirmation
 from barber_auth.models.user import User
 from barber_auth.services.registration import RegisterUser
@@ -26,11 +25,10 @@ class RegistrationInterrupted(RuntimeError):
 
 
 @pytest.fixture
-def register(session: AsyncSession, hasher: Argon2Hasher, mailer: DevMailer) -> RegisterUser:
+def register(session: AsyncSession, hasher: Argon2Hasher) -> RegisterUser:
     return RegisterUser(
         session=session,
         hasher=hasher,
-        mailer=mailer,
         confirmation_ttl_hours=24,
         password_min_length=10,
     )

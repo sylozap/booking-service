@@ -14,6 +14,7 @@ from uuid import UUID, uuid4
 import pytest
 from aiokafka import ConsumerRecord
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from barber_common.events.envelope import build_envelope
@@ -21,6 +22,7 @@ from barber_common.events.users import (
     AUTH_USERS_TOPIC,
     UserContactsUpdated,
     UserDeactivated,
+    UserEmailConfirmationRequested,
     UserEmailConfirmed,
     UserEventType,
     UserRegistered,
@@ -31,6 +33,7 @@ from barber_notification.consumers.user_events import (
     USER_EVENTS_TOPICS,
     UserEvents,
 )
+from barber_notification.models.notification import Notification
 from barber_notification.models.recipient import Recipient
 from barber_notification.repositories.recipients import RecipientRecord, RecipientRepository
 
@@ -39,6 +42,7 @@ pytestmark = pytest.mark.integration
 RecipientFactory = Callable[..., Awaitable[Recipient]]
 
 MORNING = datetime(2026, 9, 1, 9, 0, tzinfo=UTC)
+CONFIRMATION_URL = "http://localhost:8080/confirm-email"
 
 
 def record(
@@ -94,7 +98,7 @@ def consumer(session_factory: async_sessionmaker[AsyncSession]) -> EventConsumer
         group_id=USER_EVENTS_GROUP,
         session_factory=session_factory,
         dead_letters=AsyncMock(),
-        handlers=UserEvents().handlers(),
+        handlers=UserEvents(confirmation_url=CONFIRMATION_URL).handlers(),
         retry_policy=RetryPolicy(attempts=1),
         client=MagicMock(),
     )
@@ -239,3 +243,64 @@ async def test_an_event_type_without_a_handler_is_skipped(consumer: EventConsume
     result = await consumer.handle(record("user.renamed", UserDeactivated(user_id=uuid4())))
 
     assert result is ProcessingResult.SKIPPED
+
+
+# --- the confirmation letter --------------------------------------------------
+
+
+def confirmation_requested(user_id: UUID, *, email: str) -> ConsumerRecord[bytes, bytes]:
+    return record(
+        UserEventType.EMAIL_CONFIRMATION_REQUESTED,
+        UserEmailConfirmationRequested(
+            user_id=user_id,
+            email=email,
+            token="kJ9-token",  # noqa: S106 - a fixture, not a credential
+            expires_at="2026-09-02T09:00:00+00:00",
+        ),
+    )
+
+
+async def letters_to(session: AsyncSession, user_id: UUID) -> list[Notification]:
+    statement = select(Notification).where(Notification.user_id == user_id)
+    return list((await session.execute(statement)).scalars().all())
+
+
+async def test_a_confirmation_letter_is_queued_to_the_address_being_confirmed(
+    consumer: EventConsumer, session: AsyncSession
+) -> None:
+    user_id = uuid4()
+
+    await consumer.handle(confirmation_requested(user_id, email="new@example.com"))
+
+    [letter] = await letters_to(session, user_id)
+    assert (letter.channel, letter.template, letter.address) == (
+        "email",
+        "email_confirmation",
+        "new@example.com",
+    )
+    assert letter.payload["link"] == f"{CONFIRMATION_URL}?token=kJ9-token"
+
+
+async def test_the_letter_ignores_preferences_but_not_a_deactivation(
+    consumer: EventConsumer, session: AsyncSession, make_recipient: RecipientFactory
+) -> None:
+    switched_off = await make_recipient(preferences={"channels": {"email": False}})
+    deactivated = await make_recipient(is_active=False)
+
+    await consumer.handle(confirmation_requested(switched_off.user_id, email="a@example.com"))
+    await consumer.handle(confirmation_requested(deactivated.user_id, email="b@example.com"))
+
+    assert len(await letters_to(session, switched_off.user_id)) == 1
+    assert await letters_to(session, deactivated.user_id) == []
+
+
+async def test_a_redelivered_request_queues_one_letter(
+    consumer: EventConsumer, session: AsyncSession
+) -> None:
+    user_id = uuid4()
+    message = confirmation_requested(user_id, email="a@example.com")
+
+    await consumer.handle(message)
+    await consumer.handle(message)
+
+    assert len(await letters_to(session, user_id)) == 1

@@ -30,7 +30,9 @@ class Notification(Base):
     an event delivered twice from becoming two messages.
 
     ``payload`` holds the fields the template is rendered with, not the text:
-    the address and the text are resolved when the message is sent.
+    the address and the text are resolved when the message is sent. The one
+    exception is ``address``, set when the event names it -- a confirmation
+    letter goes to the address being confirmed.
     ``next_attempt_at`` is when the worker may take the row: now for a new one,
     later for a retry, and the end of the lease for one being sent.
     """
@@ -44,6 +46,7 @@ class Notification(Base):
     template: Mapped[str] = mapped_column(String(64))
     payload: Mapped[dict[str, object]] = mapped_column(JSONB)
     dedup_key: Mapped[str] = mapped_column(String(128), unique=True)
+    address: Mapped[str | None] = mapped_column(String(320), default=None)
 
     status: Mapped[str] = mapped_column(String(16), server_default=text("'pending'"))
     attempts: Mapped[int] = mapped_column(server_default=text("0"))

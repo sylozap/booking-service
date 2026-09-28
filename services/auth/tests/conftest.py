@@ -18,7 +18,6 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from barber_auth.adapters.argon2_hasher import Argon2Hasher
 from barber_auth.adapters.database_keys import DatabaseKeys
-from barber_auth.adapters.dev_mailer import DevMailer
 from barber_auth.adapters.rsa_signer import RsaTokenSigner
 from barber_auth.domain.identifiers import SalonId, UserId
 from barber_auth.domain.roles import Role
@@ -195,14 +194,6 @@ async def concurrent_session_factory(
 @pytest.fixture
 def hasher(settings: AuthSettings) -> Argon2Hasher:
     return Argon2Hasher(settings)
-
-
-@pytest.fixture
-def mailer(settings: AuthSettings) -> DevMailer:
-    return DevMailer(
-        environment=settings.environment,
-        confirmation_url=settings.email_confirmation_url,
-    )
 
 
 @pytest.fixture

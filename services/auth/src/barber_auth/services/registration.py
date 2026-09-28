@@ -1,6 +1,8 @@
 """Registration: the account, its role, its confirmation token and two events.
 
-All of them are written in one transaction.
+All of them are written in one transaction. The letter with the link is not
+sent from here: ``notification`` sends it from
+``user.email_confirmation_requested``.
 """
 
 from __future__ import annotations
@@ -11,7 +13,6 @@ from dataclasses import dataclass
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from barber_auth.adapters.dev_mailer import DevMailer
 from barber_auth.domain.contacts import normalize_email, normalize_phone
 from barber_auth.domain.errors import EmailAlreadyRegistered, PhoneAlreadyRegistered
 from barber_auth.domain.identifiers import UserId
@@ -64,7 +65,6 @@ class RegisterUser:
         *,
         session: AsyncSession,
         hasher: PasswordHasher,
-        mailer: DevMailer,
         confirmation_ttl_hours: int,
         password_min_length: int,
     ) -> None:
@@ -75,7 +75,6 @@ class RegisterUser:
             session=session, ttl_hours=confirmation_ttl_hours
         )
         self._hasher = hasher
-        self._mailer = mailer
         self._password_min_length = password_min_length
 
     async def execute(self, *, email: str, phone: str, password: str) -> RegisteredUser:
@@ -111,7 +110,8 @@ class RegisterUser:
                     email_confirmed=False,
                 ),
             )
-            issued = await self._issue_confirmation.execute(user_id=user_id, email=user.email)
+            # The token leaves this service only inside the event it queues.
+            await self._issue_confirmation.execute(user_id=user_id, email=user.email)
 
             registered = RegisteredUser(
                 user_id=user_id,
@@ -119,11 +119,6 @@ class RegisterUser:
                 phone=user.phone,
                 role=Role.CLIENT,
             )
-
-        # Outside the transaction and after the commit: the letter is a side
-        # effect of a registration that happened, and a mailer that fails must
-        # not undo an account that exists.
-        self._mailer.send_confirmation(email=registered.email, token=issued.token)
 
         # Only the user id is logged, never the email or phone.
         _logger.info("user registered", user_id=str(registered.user_id))

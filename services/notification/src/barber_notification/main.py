@@ -1,13 +1,15 @@
 """Entry point of the notification service.
 
 Delivery of notifications: the log and Telegram adapters, retries. Keeps its
-own copy of contacts, filled from ``auth.users.v1``.
+own copy of contacts, filled from ``auth.users.v1``; queues a message for every
+booking event worth one, and a worker sends what is queued.
 """
 
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
+from datetime import timedelta
 
 from fastapi import FastAPI
 
@@ -18,13 +20,20 @@ from barber_common.db.engine import create_engine_from_settings
 from barber_common.kafka import DeadLetterPublisher, EventConsumer, EventProducer
 from barber_common.outbox import OutboxRelay
 from barber_notification.api.v1.router import router
+from barber_notification.consumers.booking_events import (
+    BOOKING_EVENTS_GROUP,
+    BOOKING_EVENTS_TOPICS,
+    BookingEvents,
+)
 from barber_notification.consumers.user_events import (
     USER_EVENTS_GROUP,
     USER_EVENTS_TOPICS,
     UserEvents,
 )
-from barber_notification.providers.telegram import TelegramBotApi
+from barber_notification.providers.registry import ProviderRegistry
+from barber_notification.providers.telegram import TelegramBotApi, TelegramProvider
 from barber_notification.settings import ALEMBIC_INI, NotificationSettings
+from barber_notification.workers.delivery import DeliveryWorker
 from barber_notification.workers.telegram_updates import TelegramUpdatesWorker
 
 __all__ = ["create_application"]
@@ -59,7 +68,17 @@ def create_application(settings: NotificationSettings | None = None) -> FastAPI:
             bootstrap_servers=resolved.kafka_bootstrap_servers,
             session_factory=database.session_factory,
             dead_letters=dead_letters,
-            handlers=UserEvents().handlers(),
+            handlers=UserEvents(confirmation_url=resolved.email_confirmation_url).handlers(),
+        )
+        # A group of its own: a burst of bookings must not hold back the
+        # contacts the messages about them are sent to.
+        booking_events = EventConsumer(
+            topics=BOOKING_EVENTS_TOPICS,
+            group_id=BOOKING_EVENTS_GROUP,
+            bootstrap_servers=resolved.kafka_bootstrap_servers,
+            session_factory=database.session_factory,
+            dead_letters=dead_letters,
+            handlers=BookingEvents().handlers(),
         )
 
         # Every service checks the tokens it receives itself, against the
@@ -67,6 +86,18 @@ def create_application(settings: NotificationSettings | None = None) -> FastAPI:
         jwks, verifier = jwks_verifier(resolved)
 
         telegram = _build_telegram(resolved)
+        delivery = DeliveryWorker(
+            session_factory=database.session_factory,
+            providers=ProviderRegistry.build(
+                environment=resolved.environment,
+                telegram=TelegramProvider(telegram) if telegram is not None else None,
+            ),
+            batch_size=resolved.delivery_batch_size,
+            lease=timedelta(seconds=resolved.delivery_lease_seconds),
+            max_attempts=resolved.delivery_max_attempts,
+            retry_delay=timedelta(seconds=resolved.delivery_retry_delay_seconds),
+            idle_interval_seconds=resolved.delivery_interval_seconds,
+        )
 
         async with AsyncExitStack() as stack:
             # The producer is not started here: the relay connects on its first
@@ -78,6 +109,8 @@ def create_application(settings: NotificationSettings | None = None) -> FastAPI:
             stack.push_async_callback(dead_letters.stop)
             stack.push_async_callback(user_events.stop)
             await stack.enter_async_context(user_events.run_in_background())
+            stack.push_async_callback(booking_events.stop)
+            await stack.enter_async_context(booking_events.run_in_background())
             # Keys are fetched lazily, so auth being down delays the first
             # verification instead of stopping the start.
             await stack.enter_async_context(refreshing(jwks))
@@ -91,6 +124,7 @@ def create_application(settings: NotificationSettings | None = None) -> FastAPI:
                     poll_timeout_seconds=resolved.telegram_poll_timeout_seconds,
                 )
                 await stack.enter_async_context(updates.run_in_background())
+            await stack.enter_async_context(delivery.run_in_background())
             yield
 
     return create_app(resolved, routers=[router], lifespan=lifespan, title="Barber Notification")

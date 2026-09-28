@@ -19,7 +19,7 @@ pytestmark = pytest.mark.integration
 
 DATABASE_NAME = "notification_migrations_test"
 
-NOTIFICATION_TABLES = {"recipients", "notifications"}
+NOTIFICATION_TABLES = {"recipients", "notifications", "telegram_link_codes"}
 SHARED_TABLES = {"outbox", "processed_events"}
 
 
@@ -74,6 +74,28 @@ async def test_the_dedup_key_is_unique_in_the_database(
     await upgrade(dsn)
 
     assert "uq_notifications_dedup_key" in await unique_names(migrations_engine, "notifications")
+
+
+async def column_names(engine: AsyncEngine, table: str) -> set[str]:
+    async with engine.connect() as connection:
+        columns = await connection.run_sync(lambda sync: inspect(sync).get_columns(table))
+    return {str(column["name"]) for column in columns}
+
+
+async def test_a_notification_can_carry_the_address_its_event_named(
+    dsn: str, migrations_engine: AsyncEngine
+) -> None:
+    await upgrade(dsn)
+
+    assert "address" in await column_names(migrations_engine, "notifications")
+
+
+async def test_the_address_downgrades_away(dsn: str, migrations_engine: AsyncEngine) -> None:
+    await upgrade(dsn)
+
+    await downgrade(dsn, "0003_telegram_link_codes")
+
+    assert "address" not in await column_names(migrations_engine, "notifications")
 
 
 async def test_downgrade_removes_the_notification_tables(

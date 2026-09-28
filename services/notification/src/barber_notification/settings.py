@@ -21,6 +21,24 @@ class NotificationSettings(BaseAppSettings):
 
     service_name: str = "notification"
 
+    # --- delivery -----------------------------------------------------------
+    # How often the worker looks for due notifications when it found none, and
+    # how many it takes per pass.
+    delivery_interval_seconds: float = 1.0
+    delivery_batch_size: int = 20
+    # How long a notification taken for sending is left alone. A worker that
+    # dies mid-send leaves it to be taken again after this.
+    delivery_lease_seconds: int = 60
+    # Attempts on a temporary failure before the notification is given up on,
+    # and the first pause between them; each next one doubles.
+    delivery_max_attempts: int = 3
+    delivery_retry_delay_seconds: float = 30.0
+
+    # --- email confirmation -------------------------------------------------
+    # Where the confirmation link points: the page that reads the token out of
+    # the query string and posts it to /api/v1/auth/confirm-email.
+    email_confirmation_url: str = "http://localhost:8080/confirm-email"
+
     # --- telegram -----------------------------------------------------------
     # Optional on purpose: without a token the telegram channel is delivered to
     # the log and linking is refused, but the service starts and works.
