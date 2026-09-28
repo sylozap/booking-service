@@ -163,6 +163,10 @@ class FakeCatalog:
         # otherwise. "gone" makes catalog unreachable.
         self.answers: str = "offering"
         self.calls = 0
+        # Masters catalog can describe, by id; any other is a 404, as for a
+        # master that does not exist.
+        self.profiles: dict[str, dict[str, object]] = {}
+        self.profile_calls = 0
 
     def client(self) -> CatalogClient:
         transport = httpx.MockTransport(self._handle)
@@ -187,6 +191,10 @@ class FakeCatalog:
                 },
             )
 
+        segments = request.url.path.strip("/").split("/")
+        if segments[:3] == ["internal", "v1", "masters"] and len(segments) == 4:
+            return self._profile(segments[3])
+
         self.calls += 1
         if self.answers == "gone":
             raise httpx.ConnectError("connection refused")
@@ -199,6 +207,34 @@ class FakeCatalog:
 
         master_id, service_id = request.url.path.split("/")[-3], request.url.path.split("/")[-1]
         return httpx.Response(200, json=self._offering(master_id, service_id))
+
+    def knows_master(
+        self,
+        master_id: UUID,
+        *,
+        salon_id: UUID | None = None,
+        user_id: UUID | None = None,
+        is_active: bool = True,
+    ) -> None:
+        """Let catalog describe this master, as if their profile existed there."""
+        self.profiles[str(master_id)] = {
+            "master_id": str(master_id),
+            "salon_id": str(salon_id or self.salon_id),
+            "user_id": str(user_id or uuid4()),
+            "is_active": is_active,
+            "timezone": self.timezone,
+        }
+
+    def _profile(self, master_id: str) -> httpx.Response:
+        self.profile_calls += 1
+        profile = self.profiles.get(master_id)
+        if profile is None:
+            return httpx.Response(
+                404,
+                json={"status": 404, "code": "not_found", "detail": "no master"},
+                headers={"content-type": "application/problem+json"},
+            )
+        return httpx.Response(200, json=profile)
 
     def _offering(self, master_id: str, service_id: str) -> dict[str, object]:
         return {
@@ -493,8 +529,10 @@ async def make_booking(session: AsyncSession) -> BookingFactory:
         buffer_min: int = 0,
         status: str = "confirmed",
         salon_id: UUID | None = None,
+        client_user_id: UUID | None = None,
+        cancel_deadline_min: int = 240,
     ) -> Booking:
-        client_id = uuid4()
+        client_id = client_user_id or uuid4()
         booking = Booking(
             salon_id=salon_id or uuid4(),
             master_id=master_id,
@@ -505,6 +543,7 @@ async def make_booking(session: AsyncSession) -> BookingFactory:
             currency="RUB",
             duration_min=duration_min,
             buffer_min=buffer_min,
+            cancel_deadline_min=cancel_deadline_min,
             start_at=start_at,
             end_at=start_at + timedelta(minutes=duration_min),
             status=status,

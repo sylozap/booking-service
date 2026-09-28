@@ -21,7 +21,7 @@ from datetime import date, datetime
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from barber_booking.domain.identifiers import MasterId
+from barber_booking.domain.identifiers import BookingId, MasterId
 from barber_booking.models.booking import ACTIVE_BOOKING_STATUSES
 
 __all__ = ["AvailabilityRepository"]
@@ -152,6 +152,7 @@ WHERE tstzrange(g.slot, g.slot + make_interval(mins => p.duration_min), '[)') <@
       FROM bookings b
       WHERE b.master_id = p.master_id
         AND b.status = ANY(CAST(:active_statuses AS text[]))
+        AND b.id IS DISTINCT FROM CAST(:ignored_booking_id AS uuid)
         AND b.occupied_range && tstzrange(
                 g.slot,
                 g.slot + make_interval(mins => p.duration_min + p.buffer_min),
@@ -181,6 +182,7 @@ class AvailabilityRepository:
         step_min: int,
         not_before: datetime,
         not_after: datetime,
+        ignoring: BookingId | None = None,
     ) -> dict[date, list[datetime]]:
         """Free starts of each date from ``date_from`` to ``date_to``.
 
@@ -188,6 +190,9 @@ class AvailabilityRepository:
         ``not_after`` the end of its booking horizon; both are passed in rather
         than read from the clock here, so a test can place them where it needs
         them. Dates without a single free start are absent from the answer.
+
+        ``ignoring`` leaves one booking out of the busy time: a booking being
+        moved does not stand in its own way.
         """
         result = await self._session.execute(
             _SLOTS,
@@ -202,6 +207,7 @@ class AvailabilityRepository:
                 "date_from": date_from,
                 "date_to": date_to,
                 "active_statuses": list(ACTIVE_BOOKING_STATUSES),
+                "ignored_booking_id": ignoring,
             },
         )
 

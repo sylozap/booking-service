@@ -74,6 +74,9 @@ class Booking(Base):
     currency: Mapped[str] = mapped_column(String(3))
     duration_min: Mapped[int]
     buffer_min: Mapped[int] = mapped_column(server_default=text("0"))
+    # The salon's policy as it stood when this was booked: cancelling needs
+    # nothing from catalog, and the client cancels on the terms they booked on.
+    cancel_deadline_min: Mapped[int] = mapped_column(server_default=text("240"))
 
     start_at: Mapped[datetime]
     end_at: Mapped[datetime]
@@ -94,6 +97,7 @@ class Booking(Base):
     __table_args__ = (
         CheckConstraint("duration_min > 0", name="duration_min_positive"),
         CheckConstraint("buffer_min >= 0", name="buffer_min_not_negative"),
+        CheckConstraint("cancel_deadline_min >= 0", name="cancel_deadline_min_not_negative"),
         CheckConstraint("end_at > start_at", name="end_at_after_start_at"),
         CheckConstraint(
             "occupied_range = tstzrange(start_at, "
@@ -137,6 +141,7 @@ class Booking(Base):
         status: str,
         created_by: UUID,
         buffer_min: int = 0,
+        cancel_deadline_min: int = 240,
         reminder_at: datetime | None = None,
         id: UUID | None = None,
     ) -> None:
@@ -151,6 +156,7 @@ class Booking(Base):
             currency=currency,
             duration_min=duration_min,
             buffer_min=buffer_min,
+            cancel_deadline_min=cancel_deadline_min,
             start_at=start_at,
             end_at=end_at,
             occupied_range=occupied_range_of(start_at, end_at, buffer_min),

@@ -7,13 +7,18 @@ from decimal import Decimal
 from uuid import uuid4
 
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from barber_common.events.bookings import (
     BOOKING_AGGREGATE_TYPE,
     BOOKINGS_TOPIC,
+    BookingCancelled,
+    BookingCompleted,
     BookingCreated,
     BookingEventType,
+    BookingNoShow,
+    BookingRescheduled,
+    CancelledBy,
 )
 
 START_AT = datetime(2026, 10, 5, 7, 0, tzinfo=UTC)
@@ -64,9 +69,68 @@ def test_a_field_added_by_a_newer_producer_is_ignored() -> None:
     assert event.service_name == "Haircut"
 
 
-def test_the_payload_carries_no_contact_details() -> None:
+@pytest.mark.parametrize(
+    "payload",
+    [BookingCreated, BookingCancelled, BookingRescheduled, BookingCompleted, BookingNoShow],
+)
+def test_the_payload_carries_no_contact_details(payload: type[BaseModel]) -> None:
     # Who the client is reachable at belongs to auth, and notification keeps
     # its own table of recipients.
-    fields = set(BookingCreated.model_fields)
+    fields = set(payload.model_fields)
 
     assert not fields & {"email", "phone", "telegram_chat_id"}
+
+
+def test_a_cancellation_says_which_side_called_it_off() -> None:
+    event = BookingCancelled(
+        booking_id=uuid4(),
+        salon_id=uuid4(),
+        master_id=uuid4(),
+        client_user_id=uuid4(),
+        service_name="Haircut",
+        start_at=START_AT,
+        end_at=START_AT + timedelta(minutes=45),
+        cancelled_by=CancelledBy.SALON,
+        reason="master_deactivated",
+    )
+
+    document = event.model_dump(mode="json")
+
+    assert document["cancelled_by"] == "salon"
+    assert document["reason"] == "master_deactivated"
+
+
+def test_a_move_carries_both_the_old_time_and_the_new_one() -> None:
+    later = START_AT + timedelta(days=1)
+    event = BookingRescheduled(
+        booking_id=uuid4(),
+        salon_id=uuid4(),
+        master_id=uuid4(),
+        client_user_id=uuid4(),
+        service_name="Haircut",
+        previous_start_at=START_AT,
+        previous_end_at=START_AT + timedelta(minutes=45),
+        start_at=later,
+        end_at=later + timedelta(minutes=45),
+    )
+
+    restored = BookingRescheduled.model_validate_json(event.model_dump_json())
+
+    assert (restored.previous_start_at, restored.start_at) == (START_AT, later)
+
+
+@pytest.mark.parametrize("payload", [BookingCompleted, BookingNoShow])
+def test_a_closed_visit_is_described_by_its_booking(
+    payload: type[BookingCompleted] | type[BookingNoShow],
+) -> None:
+    event = payload(
+        booking_id=uuid4(),
+        salon_id=uuid4(),
+        master_id=uuid4(),
+        client_user_id=uuid4(),
+        service_name="Haircut",
+        start_at=START_AT,
+        end_at=START_AT + timedelta(minutes=45),
+    )
+
+    assert payload.model_validate_json(event.model_dump_json()) == event

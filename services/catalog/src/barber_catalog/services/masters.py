@@ -16,6 +16,7 @@ from barber_catalog.domain.identifiers import MasterId, SalonId
 from barber_catalog.domain.pricing import Offering
 from barber_catalog.models.master import Master
 from barber_catalog.models.master_service import MasterService
+from barber_catalog.models.salon import Salon
 from barber_catalog.repositories.masters import (
     MASTER_CURSOR_ARITY,
     MasterRepository,
@@ -50,6 +51,7 @@ __all__ = [
     "ActivateMaster",
     "CreateMaster",
     "master_snapshot",
+    "snapshot_of",
     "DeactivateMaster",
     "ListSalonMasters",
     "ReadMasterCard",
@@ -77,8 +79,13 @@ def master_response(master: Master) -> MasterResponse:
     )
 
 
-def master_snapshot(master: Master) -> MasterUpdated:
-    """The whole of a master, as ``master.updated`` reports it."""
+def master_snapshot(master: Master, salon: Salon) -> MasterUpdated:
+    """The whole of a master, as ``master.updated`` reports it.
+
+    ``salon`` is the master's own: its time zone travels with the snapshot.
+    """
+    if salon.id != master.salon_id:
+        raise ValueError("a master is described with the time zone of their own salon")
     return MasterUpdated(
         master_id=master.id,
         salon_id=master.salon_id,
@@ -86,7 +93,16 @@ def master_snapshot(master: Master) -> MasterUpdated:
         display_name=master.display_name,
         specialization=master.specialization,
         is_active=master.is_active,
+        timezone=salon.timezone,
     )
+
+
+async def snapshot_of(master: Master, salons: SalonRepository) -> MasterUpdated:
+    """:func:`master_snapshot`, with the master's salon read in the same transaction."""
+    salon = await salons.get(SalonId(master.salon_id))
+    if salon is None:  # pragma: no cover - a foreign key keeps the salon of a master
+        raise SalonNotFound("The salon of this master does not exist")
+    return master_snapshot(master, salon)
 
 
 def offered_service(link: MasterService) -> OfferedServiceResponse:
@@ -185,6 +201,7 @@ class UpdateMaster:
     def __init__(self, session: AsyncSession, cache: CatalogCache) -> None:
         self._session = session
         self._masters = MasterRepository(session)
+        self._salons = SalonRepository(session)
         self._outbox = OutboxRepository(session)
         self._cache = cache
 
@@ -223,7 +240,7 @@ class UpdateMaster:
                 aggregate_type=MASTER_AGGREGATE_TYPE,
                 aggregate_id=master.id,
                 event_type=MasterEventType.UPDATED.value,
-                payload=master_snapshot(master),
+                payload=await snapshot_of(master, self._salons),
             )
             response = master_response(master)
 
@@ -361,6 +378,7 @@ class ActivateMaster:
     def __init__(self, session: AsyncSession, cache: CatalogCache) -> None:
         self._session = session
         self._masters = MasterRepository(session)
+        self._salons = SalonRepository(session)
         self._outbox = OutboxRepository(session)
         self._cache = cache
 
@@ -388,7 +406,7 @@ class ActivateMaster:
                 aggregate_type=MASTER_AGGREGATE_TYPE,
                 aggregate_id=master.id,
                 event_type=MasterEventType.UPDATED.value,
-                payload=master_snapshot(master),
+                payload=await snapshot_of(master, self._salons),
             )
             response = master_response(master)
 

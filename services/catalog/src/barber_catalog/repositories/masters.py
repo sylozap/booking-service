@@ -41,6 +41,11 @@ class MasterRepository:
         """One profile by identifier, active or not."""
         return await self._session.get(Master, master_id)
 
+    async def in_salon(self, salon_id: SalonId) -> Sequence[Master]:
+        """Every profile of one salon, active or not, in a stable order."""
+        statement = select(Master).where(Master.salon_id == salon_id).order_by(Master.id)
+        return (await self._session.execute(statement)).scalars().all()
+
     async def get_with_offerings(self, master_id: MasterId) -> Master | None:
         """One profile together with the services it actively offers.
 

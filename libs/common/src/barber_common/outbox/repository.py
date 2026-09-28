@@ -58,6 +58,40 @@ class OutboxRepository:
         await self._session.flush()
         return message
 
+    async def add_batch(
+        self,
+        *,
+        topic: str,
+        aggregate_type: str,
+        event_type: str,
+        events: Sequence[tuple[UUID, BaseModel]],
+        event_version: int = 1,
+        causation_id: UUID | None = None,
+    ) -> list[OutboxMessage]:
+        """Queue many events of one type in one statement.
+
+        For a single change that touches many aggregates -- a cascade -- where
+        a flush per event would grow the transaction by a round trip for each.
+        ``events`` pairs the id of each aggregate with its payload.
+        """
+        correlation_id = get_correlation_id()
+        messages = [
+            OutboxMessage(
+                topic=topic,
+                aggregate_type=aggregate_type,
+                aggregate_id=aggregate_id,
+                event_type=event_type,
+                event_version=event_version,
+                payload=payload.model_dump(mode="json"),
+                correlation_id=correlation_id,
+                causation_id=causation_id,
+            )
+            for aggregate_id, payload in events
+        ]
+        self._session.add_all(messages)
+        await self._session.flush()
+        return messages
+
     async def claim_batch(self, *, limit: int) -> Sequence[OutboxMessage]:
         """Take a batch of unpublished rows and hold them for this transaction.
 

@@ -24,8 +24,13 @@ __all__ = [
     "BOOKINGS_TOPIC",
     "BOOKING_AGGREGATE_TYPE",
     "REMINDERS_TOPIC",
+    "BookingCancelled",
+    "BookingCompleted",
     "BookingCreated",
     "BookingEventType",
+    "BookingNoShow",
+    "BookingRescheduled",
+    "CancelledBy",
 ]
 
 BOOKINGS_TOPIC = "booking.bookings.v1"
@@ -79,3 +84,81 @@ class BookingCreated(BaseModel):
     status: str
     # When the reminder is due, or nothing if it is already in the past.
     reminder_at: datetime | None = None
+    # Who made it: the client themselves, or an admin of the salon who booked
+    # on their behalf -- which changes how the client is told.
+    created_by: UUID | None = None
+
+
+class CancelledBy(StrEnum):
+    """Which side called a visit off, which decides what the client is told."""
+
+    CLIENT = "client"
+    SALON = "salon"
+
+
+class BookingCancelled(BaseModel):
+    """A visit will not take place, and its time is free again.
+
+    ``cancelled_by`` is the side, not the person: the client is told either
+    that their cancellation went through or that the salon had to cancel.
+    ``reason`` is whatever the canceller wrote, or nothing.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    booking_id: UUID
+    salon_id: UUID
+    master_id: UUID
+    client_user_id: UUID
+
+    service_name: str
+    start_at: AwareDatetime
+    end_at: AwareDatetime
+
+    cancelled_by: CancelledBy
+    reason: str | None = None
+
+
+class BookingRescheduled(BaseModel):
+    """The same visit, at another time.
+
+    Both times travel, so the message can say "moved from ... to ..." without
+    the recipient having kept the first one. ``reminder_at`` is due anew.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    booking_id: UUID
+    salon_id: UUID
+    master_id: UUID
+    client_user_id: UUID
+
+    service_name: str
+    previous_start_at: AwareDatetime
+    previous_end_at: AwareDatetime
+    start_at: AwareDatetime
+    end_at: AwareDatetime
+    reminder_at: datetime | None = None
+
+
+class _VisitClosed(BaseModel):
+    """How a visit ended, recorded after it started."""
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    booking_id: UUID
+    salon_id: UUID
+    master_id: UUID
+    client_user_id: UUID
+
+    service_name: str
+    start_at: AwareDatetime
+    end_at: AwareDatetime
+
+
+class BookingCompleted(_VisitClosed):
+    """The client came and was served."""
+
+
+class BookingNoShow(_VisitClosed):
+    """The client did not come. The time stays taken all the same."""

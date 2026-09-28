@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Iterator
 from datetime import date, timedelta
+from typing import Protocol
 from uuid import UUID, uuid4
 
 import pytest
@@ -14,6 +15,22 @@ from barber_common.cache import Cache
 from barber_common.testing.fixtures import app_client
 
 pytestmark = pytest.mark.integration
+
+
+class CatalogStub(Protocol):
+    """The part of the fake catalog these tests bend."""
+
+    profile_calls: int
+
+    def knows_master(
+        self,
+        master_id: UUID,
+        *,
+        salon_id: UUID | None = None,
+        user_id: UUID | None = None,
+        is_active: bool = True,
+    ) -> None: ...
+
 
 MasterSettingsFactory = Callable[..., Awaitable[MasterSettings]]
 AuthorizationFactory = Callable[..., dict[str, str]]
@@ -485,3 +502,56 @@ async def test_a_schedule_change_retires_what_was_cached_about_the_master(
         )
 
     assert await cache.get(generation_key) == b"1"
+
+
+# --- a master booking never heard of ----------------------------------------
+
+
+async def test_the_first_touch_of_an_unknown_master_takes_their_profile_from_catalog(
+    app: FastAPI, catalog: CatalogStub, authorize: AuthorizationFactory
+) -> None:
+    master_id, salon_id = uuid4(), uuid4()
+    catalog.knows_master(master_id, salon_id=salon_id)
+    headers = authorize(roles=(("salon_admin", salon_id),))
+
+    async with app_client(app) as client:
+        put = await client.put(
+            schedule_path(master_id), json={"intervals": WEEKDAYS}, headers=headers
+        )
+        get = await client.get(schedule_path(master_id), headers=headers)
+
+    assert (put.status_code, get.status_code) == (200, 200)
+    assert get.json()["timezone"] == "Europe/Moscow"
+    # Asked once: after the first touch the settings are booking's own.
+    assert catalog.profile_calls == 1
+
+
+async def test_the_master_is_recognised_by_the_account_catalog_names(
+    app: FastAPI, catalog: CatalogStub, authorize: AuthorizationFactory
+) -> None:
+    master_id, salon_id, user_id = uuid4(), uuid4(), uuid4()
+    catalog.knows_master(master_id, salon_id=salon_id, user_id=user_id)
+
+    async with app_client(app) as client:
+        response = await client.patch(
+            f"/api/v1/masters/{master_id}/settings",
+            json={"buffer_after_min": 10},
+            headers=authorize(roles=(("master", salon_id),), user_id=user_id),
+        )
+
+    assert response.status_code == 200
+    assert response.json()["buffer_after_min"] == 10
+
+
+async def test_an_admin_of_another_salon_is_refused_for_a_master_just_learned_of(
+    app: FastAPI, catalog: CatalogStub, authorize: AuthorizationFactory
+) -> None:
+    master_id = uuid4()
+    catalog.knows_master(master_id)
+
+    async with app_client(app) as client:
+        response = await client.get(
+            schedule_path(master_id), headers=authorize(roles=(("salon_admin", uuid4()),))
+        )
+
+    assert response.status_code == 403

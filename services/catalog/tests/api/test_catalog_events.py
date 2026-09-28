@@ -150,6 +150,82 @@ async def test_the_update_payload_is_a_whole_snapshot(
     assert payload.is_active is True
 
 
+async def test_the_update_payload_carries_the_time_zone_of_the_salon(
+    app: FastAPI,
+    authorize: AuthorizationFactory,
+    make_salon: SalonFactory,
+    make_master: MasterFactory,
+    session: AsyncSession,
+) -> None:
+    salon = await make_salon(timezone="Asia/Yekaterinburg")
+    master = await make_master(salon_id=salon.id)
+
+    async with app_client(app) as client:
+        await client.patch(
+            f"/api/v1/masters/{master.id}",
+            json={"bio": "Ten years"},
+            headers=authorize(roles=(("super_admin", None),)),
+        )
+
+    payload = MasterUpdated.model_validate((await one_event(session)).payload)
+    assert payload.timezone == "Asia/Yekaterinburg"
+
+
+# --- salons -----------------------------------------------------------------
+
+
+async def test_a_new_time_zone_is_announced_for_every_master_of_the_salon(
+    app: FastAPI,
+    authorize: AuthorizationFactory,
+    make_salon: SalonFactory,
+    make_master: MasterFactory,
+    session: AsyncSession,
+) -> None:
+    salon = await make_salon(timezone="Europe/Moscow")
+    masters = {(await make_master(salon_id=salon.id)).id for _ in range(3)}
+    await make_master(salon_id=(await make_salon()).id)
+
+    async with app_client(app) as client:
+        response = await client.patch(
+            f"/api/v1/salons/{salon.id}",
+            json={"timezone": "Asia/Yekaterinburg"},
+            headers=authorize(roles=(("salon_admin", salon.id),)),
+        )
+
+    assert response.status_code == 200
+    events = await queued_events(session)
+    assert {event.event_type for event in events} == {MasterEventType.UPDATED.value}
+    assert {event.aggregate_id for event in events} == masters
+    payloads = [MasterUpdated.model_validate(event.payload) for event in events]
+    assert all(payload.timezone == "Asia/Yekaterinburg" for payload in payloads)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [{"name": "Another name"}, {"timezone": "Europe/Moscow"}],
+    ids=["another-field", "the-same-zone"],
+)
+async def test_a_salon_change_that_keeps_the_time_zone_publishes_nothing(
+    app: FastAPI,
+    authorize: AuthorizationFactory,
+    make_salon: SalonFactory,
+    make_master: MasterFactory,
+    session: AsyncSession,
+    body: dict[str, str],
+) -> None:
+    salon = await make_salon(timezone="Europe/Moscow")
+    await make_master(salon_id=salon.id)
+
+    async with app_client(app) as client:
+        await client.patch(
+            f"/api/v1/salons/{salon.id}",
+            json=body,
+            headers=authorize(roles=(("salon_admin", salon.id),)),
+        )
+
+    assert await queued_events(session) == []
+
+
 async def test_an_edit_that_changes_nothing_publishes_nothing(
     app: FastAPI,
     authorize: AuthorizationFactory,

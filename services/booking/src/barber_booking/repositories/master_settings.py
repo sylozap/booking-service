@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from sqlalchemy import select, update
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from barber_booking.domain.identifiers import MasterId, SalonId, UserId
@@ -56,3 +57,47 @@ class MasterSettingsRepository:
         )
         row = (await self._session.execute(statement)).scalar_one()
         return _to_domain(row)
+
+    async def add_if_absent(self, settings: MasterSettings) -> bool:
+        """Create the row unless the master already has one. Whether it was created.
+
+        ``ON CONFLICT DO NOTHING`` rather than a read first: the event and the
+        lazy path can race for the same master, and both must come out with
+        one row and no error. The row that is already there wins -- it holds a
+        buffer somebody may have set since.
+        """
+        statement = (
+            insert(MasterSettingsRow)
+            .values(
+                master_id=settings.master_id,
+                salon_id=settings.salon_id,
+                user_id=settings.user_id,
+                timezone=settings.timezone,
+                buffer_after_min=settings.buffer_after_min,
+                is_active=settings.is_active,
+            )
+            .on_conflict_do_nothing(index_elements=[MasterSettingsRow.master_id])
+            .returning(MasterSettingsRow.master_id)
+        )
+        created = (await self._session.execute(statement)).scalar_one_or_none()
+        return created is not None
+
+    async def follow(
+        self, master_id: MasterId, *, timezone: str | None, is_active: bool
+    ) -> MasterSettings | None:
+        """Take over what catalog now says about the master; nothing if there is no row.
+
+        The buffer is booking's own and is never touched here. A ``timezone`` of
+        ``None`` leaves the zone as it is.
+        """
+        values: dict[str, object] = {"is_active": is_active}
+        if timezone is not None:
+            values["timezone"] = timezone
+        statement = (
+            update(MasterSettingsRow)
+            .where(MasterSettingsRow.master_id == master_id)
+            .values(**values)
+            .returning(MasterSettingsRow)
+        )
+        row = (await self._session.execute(statement)).scalar_one_or_none()
+        return None if row is None else _to_domain(row)

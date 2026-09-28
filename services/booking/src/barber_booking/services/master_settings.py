@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from barber_booking.clients.catalog import CatalogClient
 from barber_booking.domain.errors import MasterNotFound
 from barber_booking.domain.identifiers import MasterId
 from barber_booking.domain.master import MasterSettings
@@ -11,6 +12,7 @@ from barber_booking.repositories.master_settings import MasterSettingsRepository
 from barber_booking.schemas.schedule import MasterSettingsResponse, MasterSettingsUpdateRequest
 from barber_booking.services.authorization import require_schedule_access
 from barber_booking.services.cache import BookingCache
+from barber_booking.services.master_lifecycle import EnsureMasterSettings
 from barber_common.auth import Principal
 from barber_common.db.session import transaction
 
@@ -34,14 +36,16 @@ class UpdateMasterSettings:
     buffer it was made with: it is part of its snapshot.
     """
 
-    def __init__(self, session: AsyncSession, cache: BookingCache) -> None:
+    def __init__(self, session: AsyncSession, cache: BookingCache, catalog: CatalogClient) -> None:
         self._session = session
         self._masters = MasterSettingsRepository(session)
+        self._ensure = EnsureMasterSettings(session, catalog)
         self._cache = cache
 
     async def execute(
         self, *, caller: Principal, master_id: MasterId, body: MasterSettingsUpdateRequest
     ) -> MasterSettingsResponse:
+        await self._ensure.execute(master_id)
         async with transaction(self._session):
             master = await self._masters.lock(master_id)
             if master is None:

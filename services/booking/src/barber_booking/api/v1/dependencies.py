@@ -17,8 +17,12 @@ from starlette.requests import Request
 from barber_booking.clients.catalog import CatalogClient
 from barber_booking.services.availability import ReadAvailability
 from barber_booking.services.cache import BookingCache
+from barber_booking.services.cancel_booking import CancelBooking
+from barber_booking.services.close_visit import CloseVisit
 from barber_booking.services.create_booking import CreateBooking
+from barber_booking.services.list_bookings import ListBookings, ReadBooking
 from barber_booking.services.master_settings import UpdateMasterSettings
+from barber_booking.services.reschedule_booking import RescheduleBooking
 from barber_booking.services.schedule import (
     AddScheduleException,
     ListScheduleExceptions,
@@ -32,12 +36,17 @@ from barber_common.db.session import get_session
 __all__ = [
     "AddScheduleExceptionScenario",
     "CacheDependency",
+    "CancelBookingScenario",
     "CatalogDependency",
+    "CloseVisitScenario",
     "CreateBookingScenario",
+    "ListBookingsScenario",
     "ListScheduleExceptionsScenario",
     "ReadAvailabilityScenario",
+    "ReadBookingScenario",
     "ReadWeeklyScheduleScenario",
     "RemoveScheduleExceptionScenario",
+    "RescheduleBookingScenario",
     "ReplaceWeeklyScheduleScenario",
     "SessionDependency",
     "UpdateMasterSettingsScenario",
@@ -116,40 +125,84 @@ def build_create_booking(
 CreateBookingScenario = Annotated[CreateBooking, Depends(build_create_booking)]
 
 
+def build_cancel_booking(session: SessionDependency, cache: CacheDependency) -> CancelBooking:
+    return CancelBooking(session, cache)
+
+
+CancelBookingScenario = Annotated[CancelBooking, Depends(build_cancel_booking)]
+
+
+def build_close_visit(session: SessionDependency) -> CloseVisit:
+    return CloseVisit(session)
+
+
+CloseVisitScenario = Annotated[CloseVisit, Depends(build_close_visit)]
+
+
+def build_list_bookings(session: SessionDependency) -> ListBookings:
+    return ListBookings(session)
+
+
+def build_read_booking(session: SessionDependency) -> ReadBooking:
+    return ReadBooking(session)
+
+
+ListBookingsScenario = Annotated[ListBookings, Depends(build_list_bookings)]
+ReadBookingScenario = Annotated[ReadBooking, Depends(build_read_booking)]
+
+
+def build_reschedule_booking(
+    request: Request,
+    session: SessionDependency,
+    cache: CacheDependency,
+    catalog: CatalogDependency,
+) -> RescheduleBooking:
+    settings = request.app.state.settings
+    return RescheduleBooking(
+        session,
+        cache,
+        catalog,
+        reminder_lead=timedelta(hours=settings.reminder_lead_hours),
+    )
+
+
+RescheduleBookingScenario = Annotated[RescheduleBooking, Depends(build_reschedule_booking)]
+
+
 def build_replace_weekly_schedule(
-    session: SessionDependency, cache: CacheDependency
+    session: SessionDependency, cache: CacheDependency, catalog: CatalogDependency
 ) -> ReplaceWeeklySchedule:
-    return ReplaceWeeklySchedule(session, cache)
+    return ReplaceWeeklySchedule(session, cache, catalog)
 
 
 def build_read_weekly_schedule(
-    session: SessionDependency, cache: CacheDependency
+    session: SessionDependency, cache: CacheDependency, catalog: CatalogDependency
 ) -> ReadWeeklySchedule:
-    return ReadWeeklySchedule(session, cache)
+    return ReadWeeklySchedule(session, cache, catalog)
 
 
 def build_add_schedule_exception(
-    session: SessionDependency, cache: CacheDependency
+    session: SessionDependency, cache: CacheDependency, catalog: CatalogDependency
 ) -> AddScheduleException:
-    return AddScheduleException(session, cache)
+    return AddScheduleException(session, cache, catalog)
 
 
 def build_list_schedule_exceptions(
-    session: SessionDependency, cache: CacheDependency
+    session: SessionDependency, cache: CacheDependency, catalog: CatalogDependency
 ) -> ListScheduleExceptions:
-    return ListScheduleExceptions(session, cache)
+    return ListScheduleExceptions(session, cache, catalog)
 
 
 def build_remove_schedule_exception(
-    session: SessionDependency, cache: CacheDependency
+    session: SessionDependency, cache: CacheDependency, catalog: CatalogDependency
 ) -> RemoveScheduleException:
-    return RemoveScheduleException(session, cache)
+    return RemoveScheduleException(session, cache, catalog)
 
 
 def build_update_master_settings(
-    session: SessionDependency, cache: CacheDependency
+    session: SessionDependency, cache: CacheDependency, catalog: CatalogDependency
 ) -> UpdateMasterSettings:
-    return UpdateMasterSettings(session, cache)
+    return UpdateMasterSettings(session, cache, catalog)
 
 
 ReplaceWeeklyScheduleScenario = Annotated[

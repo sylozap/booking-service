@@ -89,13 +89,17 @@ class MasterUpdated(_MasterEvent):
     """The current state of a master after a change.
 
     A full snapshot keeps consumers idempotent under at-least-once delivery.
-    Offered services and the salon time zone are not included.
+    Offered services are not included. ``timezone`` is the zone of the salon:
+    a change of it is announced as this event for every master of the salon,
+    because the schedule of each is written in that zone. It is optional so a
+    snapshot written before it existed still parses.
     """
 
     user_id: UUID
     display_name: str
     specialization: str | None
     is_active: bool
+    timezone: str | None = None
 
 
 class _ServiceEvent(BaseModel):

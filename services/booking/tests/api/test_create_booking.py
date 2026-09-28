@@ -30,6 +30,7 @@ class CatalogStub(Protocol):
     duration_min: int
     booking_min_lead_min: int
     booking_horizon_days: int
+    cancel_deadline_min: int
     answers: str
     service_name: str
     price: str
@@ -142,6 +143,24 @@ async def test_the_booking_is_stored_with_a_reminder(
     assert stored is not None
     assert stored.price == Decimal("3500.00")
     assert stored.reminder_at == TEN_MOSCOW - timedelta(hours=4)
+
+
+async def test_the_salon_cancel_deadline_is_kept_with_the_booking(
+    app: FastAPI,
+    session: AsyncSession,
+    catalog: CatalogStub,
+    authorize: AuthorizationFactory,
+    make_master_settings: MasterSettingsFactory,
+    make_template: TemplateFactory,
+) -> None:
+    master = await booked_master(make_master_settings, make_template)
+    catalog.cancel_deadline_min = 180
+
+    response = await book(app, a_booking(master), authorize())
+
+    stored = await session.get(Booking, UUID(response.json()["id"]))
+    assert stored is not None
+    assert stored.cancel_deadline_min == 180
 
 
 async def test_creating_a_booking_queues_exactly_one_event(
@@ -455,10 +474,10 @@ async def test_the_booking_belongs_to_the_caller_of_the_token(
 
     response = await book(
         app,
-        # Even if the body carried a client, it would be refused as unknown.
+        # Naming somebody else is the salon's power, not a client's.
         {**a_booking(master), "client_user_id": str(uuid4())},
         authorize(user_id=client_id),
     )
 
-    assert response.status_code == 422
+    assert response.status_code == 403
     assert await bookings_of(session, master.master_id) == 0

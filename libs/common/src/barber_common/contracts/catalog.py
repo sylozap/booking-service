@@ -1,9 +1,14 @@
-"""Contract of the internal catalog endpoint used by ``booking``.
+"""Contracts of the internal catalog endpoints used by ``booking``.
 
 ``GET /internal/v1/masters/{id}/services/{sid}`` returns in one call whether the
 master is active, the price and duration for this master, a snapshot of the
-service name, and the salon time zone with its booking policies. The schema is
-imported by both ``catalog`` and ``booking``.
+service name, and the salon time zone with its booking policies.
+
+``GET /internal/v1/masters/{id}`` returns who a master is: the account behind
+the profile, the salon and its time zone. ``booking`` reads it only for a master
+whose ``master.created`` it never received.
+
+The schemas are imported by both ``catalog`` and ``booking``.
 """
 
 from __future__ import annotations
@@ -13,7 +18,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
-__all__ = ["CATALOG_READ_SCOPE", "MasterServiceDetails", "SalonPolicies"]
+__all__ = ["CATALOG_READ_SCOPE", "MasterProfile", "MasterServiceDetails", "SalonPolicies"]
 
 # The scope a service token has to carry to read the catalog, shared by the
 # endpoint and its callers.
@@ -63,3 +68,22 @@ class MasterServiceDetails(BaseModel):
     currency: str
 
     salon: SalonPolicies
+
+
+class MasterProfile(BaseModel):
+    """Who a master is, as far as another service needs to know.
+
+    The same facts ``master.created`` carries, for a consumer that has to start
+    from the current state rather than from the event.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    master_id: UUID
+    salon_id: UUID
+    # The account behind the profile, which lets a master be recognised as the
+    # owner of their schedule.
+    user_id: UUID
+    is_active: bool
+    # The IANA zone of the salon, the one every schedule of it is written in.
+    timezone: str

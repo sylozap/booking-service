@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-__all__ = ["ACTIVE_STATUSES", "BookingStatus"]
+__all__ = ["ACTIVE_STATUSES", "CANCELLED_STATUSES", "OPEN_STATUSES", "BookingStatus"]
 
 
 class BookingStatus(StrEnum):
@@ -29,4 +29,11 @@ ACTIVE_STATUSES = frozenset(
         BookingStatus.COMPLETED,
         BookingStatus.NO_SHOW,
     }
+)
+
+# A visit still ahead: it can be moved, called off or, once it starts, closed.
+OPEN_STATUSES = frozenset({BookingStatus.PENDING, BookingStatus.CONFIRMED})
+
+CANCELLED_STATUSES = frozenset(
+    {BookingStatus.CANCELLED_BY_CLIENT, BookingStatus.CANCELLED_BY_SALON}
 )

@@ -17,7 +17,7 @@ from pydantic import SecretStr
 
 from barber_booking.clients.catalog import CatalogClient
 from barber_booking.clients.service_token import ServiceTokenProvider
-from barber_booking.domain.errors import ServiceNotOffered
+from barber_booking.domain.errors import MasterNotFound, ServiceNotOffered
 from barber_booking.domain.identifiers import MasterId, ServiceId
 from barber_booking.services.cache import BookingCache
 from barber_booking.services.offerings import ReadOffering
@@ -286,3 +286,48 @@ async def test_a_cache_that_is_down_falls_through_to_catalog(
 
     assert details.master_id == MASTER
     assert platform.catalog_calls == 2
+
+
+# --- the profile of a master ------------------------------------------------
+
+
+def profile_response(**overrides: object) -> httpx.Response:
+    document: dict[str, object] = {
+        "master_id": str(MASTER),
+        "salon_id": str(uuid4()),
+        "user_id": str(uuid4()),
+        "is_active": True,
+        "timezone": "Asia/Yekaterinburg",
+    }
+    document.update(overrides)
+    return httpx.Response(200, json=document)
+
+
+async def test_the_profile_of_a_master_arrives_as_the_shared_contract(
+    catalog: CatalogClient, platform: Platform
+) -> None:
+    platform.offerings.append(profile_response())
+
+    profile = await catalog.get_master(master_id=MASTER)
+
+    assert profile.master_id == MASTER
+    assert profile.timezone == "Asia/Yekaterinburg"
+    assert platform.presented_tokens == ["Bearer token-1"]
+
+
+async def test_an_unknown_master_becomes_not_found(
+    catalog: CatalogClient, platform: Platform
+) -> None:
+    platform.offerings.append(problem(404, "not_found"))
+
+    with pytest.raises(MasterNotFound):
+        await catalog.get_master(master_id=MASTER)
+
+
+async def test_a_profile_that_is_not_the_contract_is_an_upstream_error(
+    catalog: CatalogClient, platform: Platform
+) -> None:
+    platform.offerings.append(profile_response(user_id="nobody"))
+
+    with pytest.raises(UpstreamError):
+        await catalog.get_master(master_id=MASTER)

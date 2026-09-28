@@ -19,6 +19,11 @@ from barber_booking.consumers.catalog_events import (
     CONSUMER_GROUP,
     CatalogCacheInvalidation,
 )
+from barber_booking.consumers.master_lifecycle import (
+    MASTER_LIFECYCLE_GROUP,
+    MASTER_LIFECYCLE_TOPICS,
+    MasterLifecycle,
+)
 from barber_booking.services.cache import BookingCache
 from barber_booking.settings import ALEMBIC_INI, BookingSettings
 from barber_common.app import create_app, use_database
@@ -72,6 +77,16 @@ def create_application(settings: BookingSettings | None = None) -> FastAPI:
             dead_letters=dead_letters,
             handlers=CatalogCacheInvalidation(BookingCache(app.state.cache)).handlers(),
         )
+        # A group of its own: the settings of masters must not wait on Redis,
+        # and a cache that is down must not hold back a cancellation.
+        master_events = EventConsumer(
+            topics=MASTER_LIFECYCLE_TOPICS,
+            group_id=MASTER_LIFECYCLE_GROUP,
+            bootstrap_servers=resolved.kafka_bootstrap_servers,
+            session_factory=database.session_factory,
+            dead_letters=dead_letters,
+            handlers=MasterLifecycle().handlers(),
+        )
 
         auth_http = ServiceClient(base_url=resolved.auth_url, upstream="auth")
         catalog_http = ServiceClient(base_url=resolved.catalog_url, upstream="catalog")
@@ -101,6 +116,8 @@ def create_application(settings: BookingSettings | None = None) -> FastAPI:
             stack.push_async_callback(dead_letters.stop)
             stack.push_async_callback(catalog_events.stop)
             await stack.enter_async_context(catalog_events.run_in_background())
+            stack.push_async_callback(master_events.stop)
+            await stack.enter_async_context(master_events.run_in_background())
             yield
 
     return create_app(resolved, routers=[router], lifespan=lifespan, title="Barber Booking")
