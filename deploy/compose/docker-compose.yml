@@ -287,6 +287,10 @@ services:
       <<: *service-environment
       SERVICE_NAME: notification
       DATABASE_DSN: postgresql+asyncpg://notification:notification@postgres:5432/notification
+      # Empty unless set in the shell or in .env: without a bot the telegram
+      # channel is written to the log, and the stack works all the same.
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME:-}
     ports:
       - "8004:8004"
     volumes:
