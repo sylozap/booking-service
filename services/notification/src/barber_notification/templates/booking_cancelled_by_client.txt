@@ -1,0 +1,3 @@
+Запись отменена: $service_name
+
+Вы отменили запись на «$service_name» — $start_at.
