@@ -60,7 +60,8 @@ class CancelMasterBookings:
         async with transaction(self._session):
             # A master booking never had settings for has nothing to switch
             # off; their bookings are cancelled all the same.
-            await self._masters.follow(master_id, timezone=None, is_active=False)
+            master = await self._masters.follow(master_id, timezone=None, is_active=False)
+            timezone = master.timezone if master is not None else None
 
             upcoming = await self._bookings.lock_upcoming(master_id, now=now)
             cancelled = [_cancelled(booking, now) for booking in upcoming]
@@ -69,7 +70,9 @@ class CancelMasterBookings:
                 topic=BOOKINGS_TOPIC,
                 aggregate_type=BOOKING_AGGREGATE_TYPE,
                 event_type=BookingEventType.CANCELLED.value,
-                events=[(booking.id, _event_of(booking)) for booking in cancelled],
+                events=[
+                    (booking.id, _event_of(booking, timezone=timezone)) for booking in cancelled
+                ],
                 causation_id=cause,
             )
 
@@ -85,7 +88,7 @@ def _cancelled(booking: Booking, now: datetime) -> Booking:
     return booking.cancel(by=Actor.the_salon(), now=now, reason=MASTER_DEACTIVATED)
 
 
-def _event_of(booking: Booking) -> BookingCancelled:
+def _event_of(booking: Booking, *, timezone: str | None) -> BookingCancelled:
     return BookingCancelled(
         booking_id=booking.id,
         salon_id=booking.salon_id,
@@ -96,4 +99,5 @@ def _event_of(booking: Booking) -> BookingCancelled:
         end_at=booking.end_at,
         cancelled_by=CancelledBy.SALON,
         reason=booking.cancel_reason,
+        timezone=timezone,
     )

@@ -109,6 +109,40 @@ async def test_the_cancellation_queues_one_event_saying_the_client_did_it(
     assert events[0].payload["client_user_id"] == str(client_id)
 
 
+async def test_the_cancellation_tells_the_time_in_the_zone_of_the_salon(
+    app: FastAPI,
+    session: AsyncSession,
+    authorize: AuthorizationFactory,
+    make_master_settings: MasterSettingsFactory,
+    make_booking: BookingFactory,
+) -> None:
+    master = await make_master_settings(timezone="Asia/Yekaterinburg")
+    client_id = uuid4()
+    booking = await make_booking(
+        master_id=master.master_id, start_at=in_hours(24), client_user_id=client_id
+    )
+
+    await cancel(app, booking.id, authorize(user_id=client_id))
+
+    [event] = await cancellation_events(session)
+    assert event.payload["timezone"] == "Asia/Yekaterinburg"
+
+
+async def test_a_master_booking_has_no_settings_for_is_cancelled_without_a_zone(
+    app: FastAPI,
+    session: AsyncSession,
+    authorize: AuthorizationFactory,
+    make_booking: BookingFactory,
+) -> None:
+    client_id = uuid4()
+    booking = await make_booking(master_id=uuid4(), start_at=in_hours(24), client_user_id=client_id)
+
+    await cancel(app, booking.id, authorize(user_id=client_id))
+
+    [event] = await cancellation_events(session)
+    assert event.payload["timezone"] is None
+
+
 async def test_the_client_is_refused_three_hours_ahead_of_a_four_hour_deadline(
     app: FastAPI,
     session: AsyncSession,

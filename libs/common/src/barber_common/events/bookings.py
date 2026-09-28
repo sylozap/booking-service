@@ -9,6 +9,10 @@ cancels.
 ``auth``, and ``notification`` keeps its own table of recipients filled from
 ``auth.users.v1``. An event carries the data of its own aggregate and nothing
 else.
+
+``timezone`` is the salon's IANA zone, so a message can say "15:00" where the
+client lives rather than "12:00 UTC". Optional: booking may not know the zone
+of a master it never had settings for.
 """
 
 from __future__ import annotations
@@ -87,6 +91,7 @@ class BookingCreated(BaseModel):
     # Who made it: the client themselves, or an admin of the salon who booked
     # on their behalf -- which changes how the client is told.
     created_by: UUID | None = None
+    timezone: str | None = None
 
 
 class CancelledBy(StrEnum):
@@ -117,6 +122,7 @@ class BookingCancelled(BaseModel):
 
     cancelled_by: CancelledBy
     reason: str | None = None
+    timezone: str | None = None
 
 
 class BookingRescheduled(BaseModel):
@@ -139,6 +145,7 @@ class BookingRescheduled(BaseModel):
     start_at: AwareDatetime
     end_at: AwareDatetime
     reminder_at: datetime | None = None
+    timezone: str | None = None
 
 
 class _VisitClosed(BaseModel):
@@ -154,6 +161,7 @@ class _VisitClosed(BaseModel):
     service_name: str
     start_at: AwareDatetime
     end_at: AwareDatetime
+    timezone: str | None = None
 
 
 class BookingCompleted(_VisitClosed):

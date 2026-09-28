@@ -181,6 +181,8 @@ async def test_creating_a_booking_queues_exactly_one_event(
     assert str(event.aggregate_id) == response.json()["id"]
     assert event.payload["service_name"] == "Haircut"
     assert "email" not in event.payload
+    # The salon's zone, so the client is told the time where they are.
+    assert event.payload["timezone"] == "Europe/Moscow"
 
 
 async def test_a_later_start_of_the_same_day_is_bookable_too(

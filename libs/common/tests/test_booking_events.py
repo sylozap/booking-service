@@ -119,6 +119,14 @@ def test_a_move_carries_both_the_old_time_and_the_new_one() -> None:
     assert (restored.previous_start_at, restored.start_at) == (START_AT, later)
 
 
+def test_the_zone_of_the_salon_is_optional_and_survives_the_trip() -> None:
+    without = booking_created()
+    with_zone = booking_created(timezone="Asia/Yekaterinburg")
+
+    assert without.timezone is None
+    assert BookingCreated.model_validate_json(with_zone.model_dump_json()) == with_zone
+
+
 @pytest.mark.parametrize("payload", [BookingCompleted, BookingNoShow])
 def test_a_closed_visit_is_described_by_its_booking(
     payload: type[BookingCompleted] | type[BookingNoShow],
