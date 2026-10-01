@@ -9,8 +9,9 @@ COMPOSE_OBS_FILE := deploy/compose/docker-compose.obs.yml
 SIGNING_KEY := deploy/compose/secrets/auth-signing-key.pem
 COMPOSE := docker compose -f $(COMPOSE_FILE)
 COMPOSE_WITH_OBS := docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OBS_FILE)
+OBS_CONTAINERS := prometheus grafana tempo loki
 
-.PHONY: help sync hooks check lint format type test test-unit keys up up-obs down logs migrate seed kind-up kind-down clean
+.PHONY: help sync hooks check lint format type test test-unit keys up obs-up obs-down down logs migrate seed kind-up kind-down clean
 
 help: ## Show available commands
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -66,13 +67,22 @@ up: keys ## Start the local environment
 	@test -f $(COMPOSE_FILE) || { echo "$(COMPOSE_FILE) not found"; exit 1; }
 	$(COMPOSE) up -d --build
 
-up-obs: keys ## Start the local environment together with the observability profile
+obs-up: keys ## Start the local environment with Prometheus, Grafana, Tempo and Loki
 	@test -f $(COMPOSE_FILE) || { echo "$(COMPOSE_FILE) not found"; exit 1; }
 	$(COMPOSE_WITH_OBS) up -d --build
+	@echo "Grafana: http://localhost:3000  Prometheus: http://localhost:9090"
+
+# The services are brought up again from the main file alone: that recreates
+# them with tracing off, instead of leaving them exporting to a Tempo that is gone.
+obs-down: ## Stop the observability profile, keep the local environment running
+	$(COMPOSE_WITH_OBS) rm --stop --force $(OBS_CONTAINERS)
+	$(COMPOSE) up -d
 
 down: ## Stop the local environment
 	@test -f $(COMPOSE_FILE) || { echo "$(COMPOSE_FILE) not found"; exit 1; }
-	$(COMPOSE) down -v
+	@# The containers of the observability profile belong to the same project,
+	@# and without --remove-orphans they would outlive the stack.
+	$(COMPOSE) down -v --remove-orphans
 
 logs: ## Follow the local environment logs
 	@test -f $(COMPOSE_FILE) || { echo "$(COMPOSE_FILE) not found"; exit 1; }

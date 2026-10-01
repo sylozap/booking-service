@@ -1,0 +1,35 @@
+# Scrape configuration of the local stack.
+#
+# One job per service, and the label "service" set by hand: in the cluster the
+# ServiceMonitor puts the same label on the same targets, so a dashboard that
+# filters by "service" works in both places unchanged.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: api-gateway
+    static_configs:
+      - targets: ["api-gateway:8000"]
+        labels: { service: api-gateway, env: local }
+
+  - job_name: auth
+    static_configs:
+      - targets: ["auth:8001"]
+        labels: { service: auth, env: local }
+
+  - job_name: catalog
+    static_configs:
+      - targets: ["catalog:8002"]
+        labels: { service: catalog, env: local }
+
+  - job_name: booking
+    static_configs:
+      - targets: ["booking:8003"]
+        labels: { service: booking, env: local }
+
+  - job_name: notification
+    static_configs:
+      - targets: ["notification:8004"]
+        labels: { service: notification, env: local }

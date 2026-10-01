@@ -1,0 +1,29 @@
+# Data sources of Grafana, provisioned at startup.
+#
+# The uids are fixed: dashboards refer to a data source by uid, and a uid that
+# Grafana generated would differ between this stack and the cluster.
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    jsonData:
+      # The scrape interval: rate() over less than two scrapes draws nothing.
+      timeInterval: 15s
+
+  - name: Tempo
+    uid: tempo
+    type: tempo
+    access: proxy
+    url: http://tempo:3200
+
+  - name: Loki
+    uid: loki
+    type: loki
+    access: proxy
+    url: http://loki:3100

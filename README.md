@@ -52,15 +52,62 @@ notification `8004`. Исходники смонтированы в контей
 перезапускает сервис без пересборки образа.
 
 Миграции применяются одноразовыми контейнерами `<service>-migrate` при подъёме
-стенда; вручную — `make migrate`. Профиль наблюдаемости (`make up-obs`) пока
-пустой.
+стенда; вручную — `make migrate`.
+
+## Наблюдаемость
+
+```bash
+make obs-up     # стенд + Prometheus, Grafana, Tempo, Loki; трейсинг в сервисах включается
+make obs-down   # убрать профиль, сервисы остаются и перезапускаются без трейсинга
+```
+
+Профиль отдельный: вместе со стендом он не помещается в 8 ГБ памяти
+(см. [docs/13-risks.md](docs/13-risks.md)), у каждого контейнера свой `mem_limit`.
+
+| Что | Где |
+|---|---|
+| Grafana, вход без логина | http://localhost:3000 |
+| Prometheus | http://localhost:9090 |
+| Tempo API | http://localhost:3200 |
+
+Конфигурация compose — `deploy/compose/observability/`, дашборды —
+`deploy/observability/dashboards/` (общие с кластером, в Grafana правятся
+только через git).
+
+**Ручная проверка после `make obs-up`:**
+
+1. Prometheus → Status → Targets: пять целей `UP`.
+2. Grafana → Connections → Data sources: Prometheus, Tempo, Loki; Loki пока
+   пустой — логи в него собирает Alloy (T7.6).
+3. Grafana → Dashboards → Barber → System overview: данные на всех панелях
+   после трафика из шага 4.
+4. Трафик (до seed-скрипта из T8.9 — вручную; анонимный лимит гейтвея
+   невелик, поэтому часть запросов идёт в сервисы напрямую):
+
+   ```bash
+   for i in $(seq 1 5); do
+     curl -s -o /dev/null -X POST localhost:8001/api/v1/auth/register \
+       -H 'Content-Type: application/json' \
+       -d "{\"email\":\"demo-$i-$RANDOM@example.com\",\"phone\":\"+7900$RANDOM$i\",\"password\":\"correct-horse-battery-7\"}"
+   done
+   for i in $(seq 1 50); do curl -s -o /dev/null localhost:8002/api/v1/salons; done
+   for i in $(seq 1 10); do curl -s -o /dev/null localhost:8000/api/v1/salons; done
+   ```
+
+5. Grafana → Explore → Tempo, запрос
+   `{ resource.service.name = "notification" && name =~ "consume.*" }`:
+   трейс начинается с `POST /api/v1/auth/register` в `auth`, внутри —
+   `create auth.users.v1` и под ним `consume auth.users.v1` в `notification`.
+   Span `publish auth.users.v1` relay лежит отдельным трейсом со ссылкой
+   на `create` — так задумано, см. [docs/11-observability.md](docs/11-observability.md#трассировка).
 
 ## Структура
 
 ```
 libs/common/          # шасси barber_common: конфиг, логи, ошибки, БД, Kafka, health
 services/             # api-gateway, auth, catalog, booking, notification
-deploy/compose/       # локальная инфраструктура
+deploy/compose/       # локальная инфраструктура и профиль наблюдаемости
+deploy/observability/ # дашборды Grafana, общие для compose и кластера
 ```
 
 ## Конфигурация
