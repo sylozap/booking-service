@@ -25,6 +25,7 @@ failed row is never taken again.
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -42,6 +43,12 @@ from barber_common.events.notifications import (
 from barber_common.kafka.dlq import DLQ_MESSAGES, dlq_topic_of
 from barber_common.logging import get_logger
 from barber_common.outbox import OutboxRepository
+from barber_notification.metrics import (
+    NOTIFICATION_SEND_DURATION,
+    NOTIFICATIONS_OLDEST_DUE_AGE,
+    NOTIFICATIONS_PENDING,
+    NOTIFICATIONS_SENT,
+)
 from barber_notification.providers.base import Channel, DeliveryOutcome, DeliveryResult
 from barber_notification.providers.registry import ProviderRegistry
 from barber_notification.rendering import SENSITIVE_TEMPLATES, TemplateFieldMissing, render
@@ -117,6 +124,7 @@ class DeliveryWorker:
         for job in jobs:
             result = await self._send(job)
             await self._record(job, result)
+        await self._report()
         return len(jobs)
 
     async def run_forever(self, stop: asyncio.Event) -> None:
@@ -190,7 +198,13 @@ class DeliveryWorker:
         # A provider reports failures as results. One that raises anyway fails
         # the pass; the row stays ``sending`` and its lease brings it back.
         provider = self._providers.for_channel(Channel(notification.channel))
-        return await provider.send(job.address, message)
+        started = time.perf_counter()
+        try:
+            return await provider.send(job.address, message)
+        finally:
+            NOTIFICATION_SEND_DURATION.labels(channel=notification.channel).observe(
+                time.perf_counter() - started
+            )
 
     async def _record(self, job: _Job, result: DeliveryResult) -> None:
         notification = job.notification
@@ -224,10 +238,20 @@ class DeliveryWorker:
             if result.address_gone and notification.channel == Channel.TELEGRAM.value:
                 await self._forget_chat(session, notification, job.address)
 
+        NOTIFICATIONS_SENT.labels(channel=notification.channel, result=result.outcome.value).inc()
         # Counted after the commit: a transaction rolled back wrote no dead letter.
         if given_up is not None:
             DLQ_MESSAGES.labels(topic=notification.topic, reason=given_up.value).inc()
         self._log(notification, result, given_up)
+
+    async def _report(self) -> None:
+        """Measure the queue as this pass left it."""
+        async with unit_of_work(self._session_factory) as session:
+            journal = NotificationRepository(session)
+            NOTIFICATIONS_PENDING.set(await journal.count_unsent())
+            NOTIFICATIONS_OLDEST_DUE_AGE.set(
+                await journal.oldest_due_age_seconds(now=self._clock())
+            )
 
     async def _dead_letter(
         self,

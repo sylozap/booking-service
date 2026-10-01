@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from enum import StrEnum
 from uuid import UUID
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -143,6 +143,27 @@ class NotificationRepository:
         )
         # The rows were read before the update; the attempt just started counts.
         return [replace(_to_record(row), attempts=row.attempts + 1) for row in rows]
+
+    async def count_unsent(self) -> int:
+        """Notifications still in the queue: waiting, being sent, or due for a retry."""
+        statement = (
+            select(func.count()).select_from(Notification).where(Notification.status.in_(_TAKEABLE))
+        )
+        return int((await self._session.execute(statement)).scalar_one())
+
+    async def oldest_due_age_seconds(self, *, now: datetime) -> float:
+        """How long the longest-waiting due notification has waited, zero if none is due.
+
+        A row whose lease ran out counts from the end of the lease: from then on
+        it is due again and waiting for a worker.
+        """
+        statement = select(func.min(Notification.next_attempt_at)).where(
+            Notification.status.in_(_TAKEABLE), Notification.next_attempt_at <= now
+        )
+        oldest = (await self._session.execute(statement)).scalar_one_or_none()
+        if oldest is None:
+            return 0.0
+        return max(0.0, (now - oldest).total_seconds())
 
     async def mark_sent(
         self, notification_id: UUID, *, now: datetime, forget_payload: bool
