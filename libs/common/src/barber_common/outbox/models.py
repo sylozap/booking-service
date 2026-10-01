@@ -41,6 +41,9 @@ class OutboxMessage(Base):
 
     correlation_id: Mapped[str | None] = mapped_column(String(64), default=None)
     causation_id: Mapped[UUID | None] = mapped_column(default=None)
+    # The trace the event was written in, picked up again by the relay. Empty
+    # while tracing is off.
+    traceparent: Mapped[str | None] = mapped_column(String(128), default=None)
 
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     published_at: Mapped[datetime | None] = mapped_column(default=None)

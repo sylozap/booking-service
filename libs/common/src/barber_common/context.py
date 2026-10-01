@@ -11,13 +11,16 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
+from uuid import UUID
 
 from opentelemetry import trace
 
 __all__ = [
     "CONTEXT_FIELDS",
+    "bind_causation",
     "bind_context",
     "current_context",
+    "get_causation_id",
     "get_correlation_id",
     "get_user_id",
     "set_trace_context",
@@ -27,6 +30,9 @@ _correlation_id: ContextVar[str | None] = ContextVar("correlation_id", default=N
 _trace_id: ContextVar[str | None] = ContextVar("trace_id", default=None)
 _span_id: ContextVar[str | None] = ContextVar("span_id", default=None)
 _user_id: ContextVar[str | None] = ContextVar("user_id", default=None)
+# Not a log field: the format of a record is fixed, and the event being handled
+# is already named in the records of the consumer.
+_causation_id: ContextVar[UUID | None] = ContextVar("causation_id", default=None)
 
 # Order matters only for readability of the log output.
 CONTEXT_FIELDS = ("correlation_id", "trace_id", "span_id", "user_id")
@@ -47,6 +53,11 @@ def get_correlation_id() -> str | None:
 def get_user_id() -> str | None:
     """Return the id of the authenticated user, if the request has one."""
     return _user_id.get()
+
+
+def get_causation_id() -> UUID | None:
+    """Return the id of the event being handled, if this code runs because of one."""
+    return _causation_id.get()
 
 
 def set_trace_context(*, trace_id: str | None, span_id: str | None) -> None:
@@ -124,3 +135,18 @@ def bind_context(
     finally:
         for variable, token in reversed(tokens):
             variable.reset(token)
+
+
+@contextmanager
+def bind_causation(event_id: UUID) -> Iterator[None]:
+    """Name the event whose handling is running for the duration of the block.
+
+    The consumer sets it around a handler, and an event written to the outbox
+    from there takes it as its ``causation_id`` -- the way ``correlation_id``
+    is taken, so a new handler cannot forget it.
+    """
+    token = _causation_id.set(event_id)
+    try:
+        yield
+    finally:
+        _causation_id.reset(token)

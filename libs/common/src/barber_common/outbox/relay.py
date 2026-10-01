@@ -4,6 +4,9 @@ Each pass claims a batch with ``FOR UPDATE SKIP LOCKED``, publishes it and marks
 it published in one transaction. Publishing inside the transaction is
 deliberate: the row lock stops another replica from sending the same event.
 Delivery is at-least-once, and a republished event keeps its ``event_id``.
+
+The relay publishes in the context stored with each row, not in its own: see
+:mod:`barber_common.tracing` for why its span is linked rather than a child.
 """
 
 from __future__ import annotations
@@ -142,6 +145,7 @@ class OutboxRelay:
             topic=message.topic,
             aggregate_id=message.aggregate_id,
             envelope=envelope,
+            traceparent=message.traceparent,
         )
 
     async def _report(self, repository: OutboxRepository) -> None:

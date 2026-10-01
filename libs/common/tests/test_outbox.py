@@ -76,6 +76,7 @@ class RecordingProducer(EventProducer):
         topic: str,
         aggregate_id: UUID | str,
         envelope: EventEnvelope[PayloadT],
+        traceparent: str | None = None,
     ) -> None:
         self.published.append(
             PublishedEvent(
