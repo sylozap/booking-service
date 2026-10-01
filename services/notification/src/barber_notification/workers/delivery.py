@@ -20,19 +20,26 @@ when it was queued.
 The record goes through the outbox rather than straight to the broker: a pod
 dying between marking the row ``failed`` and publishing would lose it, and a
 failed row is never taken again.
+
+Steps 2 and 3 run in the trace and with the correlation id of the event behind
+the notification, stored with the row when it was queued. The ``send`` span is
+a child of the consumer that queued it, so a trace runs from the request to
+the message leaving; every attempt is a span of its own in that trace.
 """
 
 from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Callable, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+from opentelemetry import trace
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from barber_common.context import bind_context
 from barber_common.db.session import unit_of_work
 from barber_common.events.notifications import (
     NOTIFICATION_AGGREGATE_TYPE,
@@ -43,6 +50,7 @@ from barber_common.events.notifications import (
 from barber_common.kafka.dlq import DLQ_MESSAGES, dlq_topic_of
 from barber_common.logging import get_logger
 from barber_common.outbox import OutboxRepository
+from barber_common.tracing import context_of
 from barber_notification.metrics import (
     NOTIFICATION_SEND_DURATION,
     NOTIFICATIONS_OLDEST_DUE_AGE,
@@ -122,8 +130,10 @@ class DeliveryWorker:
         """One pass. Returns how many notifications it took."""
         jobs = await self._claim()
         for job in jobs:
-            result = await self._send(job)
-            await self._record(job, result)
+            with _in_context_of(job.notification) as span:
+                result = await self._send(job)
+                await self._record(job, result)
+                _describe(span, result)
         await self._report()
         return len(jobs)
 
@@ -331,6 +341,37 @@ class DeliveryWorker:
                 detail=result.detail,
                 **fields,
             )
+
+
+@contextmanager
+def _in_context_of(notification: NotificationRecord) -> Iterator[trace.Span]:
+    """Continue the trace and the correlation of the event behind the notification.
+
+    Without a stored trace the span is a root: the row was queued while
+    tracing was off.
+    """
+    with (
+        bind_context(correlation_id=notification.correlation_id),
+        trace.get_tracer(__name__).start_as_current_span(
+            f"send {notification.channel}",
+            context=context_of(notification.traceparent),
+            kind=trace.SpanKind.CLIENT,
+            attributes={
+                "barber.notification.id": str(notification.id),
+                "barber.notification.channel": notification.channel,
+                "barber.notification.template": notification.template,
+                "barber.notification.attempt": notification.attempts,
+            },
+        ) as span,
+    ):
+        yield span
+
+
+def _describe(span: trace.Span, result: DeliveryResult) -> None:
+    """Mark the attempt with its outcome; anything but a send is an error of the span."""
+    span.set_attribute("barber.notification.outcome", result.outcome.value)
+    if result.outcome is not DeliveryOutcome.SENT:
+        span.set_status(trace.Status(trace.StatusCode.ERROR, result.detail))
 
 
 def _failure_reason(result: DeliveryResult) -> DeliveryFailureReason:

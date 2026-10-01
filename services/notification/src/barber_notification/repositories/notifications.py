@@ -43,6 +43,8 @@ class NotificationRecord:
     payload: dict[str, object]
     address: str | None
     attempts: int
+    traceparent: str | None = None
+    correlation_id: str | None = None
 
 
 def _to_record(row: Notification) -> NotificationRecord:
@@ -56,6 +58,8 @@ def _to_record(row: Notification) -> NotificationRecord:
         payload=dict(row.payload),
         address=row.address,
         attempts=row.attempts,
+        traceparent=row.traceparent,
+        correlation_id=row.correlation_id,
     )
 
 
@@ -80,11 +84,15 @@ class NotificationRepository:
         template: str,
         payload: dict[str, object],
         address: str | None = None,
+        traceparent: str | None = None,
+        correlation_id: str | None = None,
     ) -> bool:
         """Queue one notification. Whether it is new.
 
         ``ON CONFLICT DO NOTHING`` on the dedup key: a second delivery of the
         same event is a no-op here, not an error.
+
+        ``traceparent`` and ``correlation_id`` are what the send continues.
         """
         statement = (
             insert(Notification)
@@ -96,6 +104,8 @@ class NotificationRepository:
                 template=template,
                 payload=payload,
                 address=address,
+                traceparent=traceparent,
+                correlation_id=correlation_id,
                 dedup_key=dedup_key_of(event_id, channel),
             )
             .on_conflict_do_nothing(index_elements=[Notification.dedup_key])

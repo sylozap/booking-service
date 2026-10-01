@@ -14,6 +14,9 @@ Which channels a message goes to:
 
 A recipient this service has not heard of, or one that was deactivated, gets
 nothing; that is logged and the event is done with.
+
+Each row keeps the trace and the correlation id of the event it came from, so
+the send, which happens later in the worker, is part of the same request.
 """
 
 from __future__ import annotations
@@ -23,8 +26,10 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from barber_common.context import get_correlation_id
 from barber_common.db.session import transaction
 from barber_common.logging import get_logger
+from barber_common.tracing import current_traceparent
 from barber_notification.preferences import NotificationKind, Preferences
 from barber_notification.providers.base import Channel
 from barber_notification.rendering import render
@@ -131,6 +136,8 @@ class EnqueueNotification:
                 template=template,
                 payload=fields,
                 address=address,
+                traceparent=current_traceparent(),
+                correlation_id=get_correlation_id(),
             )
 
         _logger.info("notification queued", user_id=str(user_id), template=template)
@@ -146,6 +153,8 @@ class EnqueueNotification:
         fields: dict[str, object],
         channels: Sequence[Channel],
     ) -> None:
+        traceparent = current_traceparent()
+        correlation_id = get_correlation_id()
         for channel in channels:
             await self._notifications.add_pending(
                 user_id=user_id,
@@ -154,4 +163,6 @@ class EnqueueNotification:
                 channel=channel.value,
                 template=template,
                 payload=fields,
+                traceparent=traceparent,
+                correlation_id=correlation_id,
             )

@@ -36,6 +36,9 @@ class Notification(Base):
     came from: a notification given up on goes to the dead letter topic of it.
     ``next_attempt_at`` is when the worker may take the row: now for a new one,
     later for a retry, and the end of the lease for one being sent.
+    ``traceparent`` and ``correlation_id`` are those of the event being handled
+    when the row was queued: the send happens later, in the worker, and
+    continues that trace and that correlation instead of starting its own.
     """
 
     __tablename__ = "notifications"
@@ -49,6 +52,8 @@ class Notification(Base):
     payload: Mapped[dict[str, object]] = mapped_column(JSONB)
     dedup_key: Mapped[str] = mapped_column(String(128), unique=True)
     address: Mapped[str | None] = mapped_column(String(320), default=None)
+    traceparent: Mapped[str | None] = mapped_column(String(128), default=None)
+    correlation_id: Mapped[str | None] = mapped_column(String(64), default=None)
 
     status: Mapped[str] = mapped_column(String(16), server_default=text("'pending'"))
     attempts: Mapped[int] = mapped_column(server_default=text("0"))
