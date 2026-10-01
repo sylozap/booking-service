@@ -14,6 +14,7 @@ from barber_booking.domain.booking import Booking
 from barber_booking.domain.booking_status import BookingStatus
 from barber_booking.domain.identifiers import BookingId
 from barber_booking.repositories.bookings import BookingRepository
+from barber_booking.repositories.master_settings import MasterSettingsRepository
 from barber_booking.schemas.bookings import BookingCancelRequest, BookingResponse
 from barber_booking.services.authorization import booking_actor
 from barber_booking.services.booking_response import booking_response
@@ -45,6 +46,7 @@ class CancelBooking:
     ) -> None:
         self._session = session
         self._bookings = BookingRepository(session)
+        self._masters = MasterSettingsRepository(session)
         self._outbox = OutboxRepository(session)
         self._cache = cache
         self._clock = clock
@@ -74,12 +76,14 @@ class CancelBooking:
                 return booking_response(booking)
 
             saved = await self._bookings.save(cancelled)
+            # Only for the message the client gets: the time in their salon.
+            master = await self._masters.get(saved.master_id)
             await self._outbox.add(
                 topic=BOOKINGS_TOPIC,
                 aggregate_type=BOOKING_AGGREGATE_TYPE,
                 aggregate_id=saved.id,
                 event_type=BookingEventType.CANCELLED.value,
-                payload=_event_of(saved),
+                payload=_event_of(saved, timezone=master.timezone if master else None),
             )
 
         _logger.info("booking cancelled", booking_id=str(saved.id), status=saved.status.value)
@@ -89,7 +93,7 @@ class CancelBooking:
         return booking_response(saved)
 
 
-def _event_of(booking: Booking) -> BookingCancelled:
+def _event_of(booking: Booking, *, timezone: str | None) -> BookingCancelled:
     return BookingCancelled(
         booking_id=booking.id,
         salon_id=booking.salon_id,
@@ -104,4 +108,5 @@ def _event_of(booking: Booking) -> BookingCancelled:
             else CancelledBy.SALON
         ),
         reason=booking.cancel_reason,
+        timezone=timezone,
     )

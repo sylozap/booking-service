@@ -1,0 +1,3 @@
+Запись перенесена: $service_name
+
+Запись на «$service_name» перенесена с $previous_start_at на $start_at.

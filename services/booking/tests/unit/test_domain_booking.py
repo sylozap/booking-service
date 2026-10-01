@@ -211,6 +211,16 @@ def test_the_reminder_is_due_anew_after_a_move() -> None:
     assert moved.reminder_sent_at is None
 
 
+def test_the_reminder_says_how_far_ahead_of_the_visit_it_is_due() -> None:
+    booking = replace(a_booking(), reminder_at=a_booking().start_at - timedelta(hours=4))
+
+    assert booking.reminder_lead_hours == 4
+
+
+def test_a_booking_without_a_reminder_has_no_lead() -> None:
+    assert replace(a_booking(), reminder_at=None).reminder_lead_hours is None
+
+
 def test_the_client_cannot_move_after_the_deadline() -> None:
     with pytest.raises(CancelDeadlinePassed):
         move(a_booking(), now=hours_before(3))

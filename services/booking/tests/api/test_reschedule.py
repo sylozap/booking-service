@@ -141,6 +141,7 @@ async def test_the_move_is_announced_with_the_old_time_and_the_new_one(
     payload = events[0].payload
     assert datetime.fromisoformat(str(payload["previous_start_at"])) == moscow(10)
     assert datetime.fromisoformat(str(payload["start_at"])) == moscow(14)
+    assert payload["timezone"] == "Europe/Moscow"
 
 
 async def test_the_reminder_is_counted_again_and_due_again(

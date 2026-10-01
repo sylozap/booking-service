@@ -187,6 +187,17 @@ class Booking:
     def is_cancelled(self) -> bool:
         return self.status in CANCELLED_STATUSES
 
+    @property
+    def reminder_lead_hours(self) -> int | None:
+        """How many hours ahead of the visit its reminder is due, if it has one.
+
+        Read off the booking rather than the settings: the lead may have been
+        configured differently when the booking was made or last moved.
+        """
+        if self.reminder_at is None:
+            return None
+        return round((self.start_at - self.reminder_at) / timedelta(hours=1))
+
     def has_started(self, now: datetime) -> bool:
         return now >= self.start_at
 

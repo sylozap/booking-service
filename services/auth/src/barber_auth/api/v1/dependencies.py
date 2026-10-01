@@ -1,7 +1,6 @@
 """Assembling the scenarios a request needs.
 
-Builds each scenario from the session, hasher and mailer of the running
-service.
+Builds each scenario from the session and the hasher of the running service.
 """
 
 from __future__ import annotations
@@ -12,7 +11,6 @@ from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import Request
 
-from barber_auth.adapters.dev_mailer import DevMailer
 from barber_auth.domain.passwords import PasswordHasher
 from barber_auth.domain.signing import TokenSigner
 from barber_auth.services.email_confirmation import ConfirmEmail
@@ -39,7 +37,6 @@ __all__ = [
     "RegisterUserScenario",
     "RevokeRoleScenario",
     "RevokeSessionsScenario",
-    "get_mailer",
     "get_password_hasher",
     "get_signer",
 ]
@@ -66,14 +63,6 @@ def get_password_hasher(request: Request) -> PasswordHasher:
     if not isinstance(hasher, PasswordHasher):  # pragma: no cover - set by create_application
         raise RuntimeError("application state has no password hasher")
     return hasher
-
-
-def get_mailer(request: Request) -> DevMailer:
-    """The development mailer that writes confirmation letters to a log."""
-    mailer = request.app.state.mailer
-    if not isinstance(mailer, DevMailer):  # pragma: no cover - set by create_application
-        raise RuntimeError("application state has no mailer")
-    return mailer
 
 
 def get_signer(request: Request) -> TokenSigner:
@@ -106,13 +95,11 @@ def build_register_user(
     session: SessionDependency,
     settings: Annotated[AuthSettings, Depends(get_settings)],
     hasher: Annotated[PasswordHasher, Depends(get_password_hasher)],
-    mailer: Annotated[DevMailer, Depends(get_mailer)],
 ) -> RegisterUser:
     """The registration scenario for this request."""
     return RegisterUser(
         session=session,
         hasher=hasher,
-        mailer=mailer,
         confirmation_ttl_hours=settings.email_confirmation_ttl_hours,
         password_min_length=settings.password_min_length,
     )

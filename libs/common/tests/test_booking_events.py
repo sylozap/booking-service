@@ -12,6 +12,7 @@ from pydantic import BaseModel, ValidationError
 from barber_common.events.bookings import (
     BOOKING_AGGREGATE_TYPE,
     BOOKINGS_TOPIC,
+    REMINDERS_TOPIC,
     BookingCancelled,
     BookingCompleted,
     BookingCreated,
@@ -19,6 +20,8 @@ from barber_common.events.bookings import (
     BookingNoShow,
     BookingRescheduled,
     CancelledBy,
+    ReminderDue,
+    ReminderEventType,
 )
 
 START_AT = datetime(2026, 10, 5, 7, 0, tzinfo=UTC)
@@ -71,7 +74,14 @@ def test_a_field_added_by_a_newer_producer_is_ignored() -> None:
 
 @pytest.mark.parametrize(
     "payload",
-    [BookingCreated, BookingCancelled, BookingRescheduled, BookingCompleted, BookingNoShow],
+    [
+        BookingCreated,
+        BookingCancelled,
+        BookingRescheduled,
+        BookingCompleted,
+        BookingNoShow,
+        ReminderDue,
+    ],
 )
 def test_the_payload_carries_no_contact_details(payload: type[BaseModel]) -> None:
     # Who the client is reachable at belongs to auth, and notification keeps
@@ -119,6 +129,14 @@ def test_a_move_carries_both_the_old_time_and_the_new_one() -> None:
     assert (restored.previous_start_at, restored.start_at) == (START_AT, later)
 
 
+def test_the_zone_of_the_salon_is_optional_and_survives_the_trip() -> None:
+    without = booking_created()
+    with_zone = booking_created(timezone="Asia/Yekaterinburg")
+
+    assert without.timezone is None
+    assert BookingCreated.model_validate_json(with_zone.model_dump_json()) == with_zone
+
+
 @pytest.mark.parametrize("payload", [BookingCompleted, BookingNoShow])
 def test_a_closed_visit_is_described_by_its_booking(
     payload: type[BookingCompleted] | type[BookingNoShow],
@@ -134,3 +152,22 @@ def test_a_closed_visit_is_described_by_its_booking(
     )
 
     assert payload.model_validate_json(event.model_dump_json()) == event
+
+
+def test_a_reminder_carries_what_its_message_needs() -> None:
+    reminder = ReminderDue(
+        booking_id=uuid4(),
+        salon_id=uuid4(),
+        master_id=uuid4(),
+        client_user_id=uuid4(),
+        service_name="Haircut",
+        start_at=START_AT,
+        end_at=START_AT + timedelta(minutes=45),
+        hours_before=4,
+        timezone="Asia/Yekaterinburg",
+    )
+
+    restored = ReminderDue.model_validate_json(reminder.model_dump_json())
+
+    assert restored == reminder
+    assert (REMINDERS_TOPIC, ReminderEventType.DUE) == ("booking.reminders.v1", "reminder.due")

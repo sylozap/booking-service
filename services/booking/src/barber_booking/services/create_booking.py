@@ -215,7 +215,7 @@ class CreateBooking:
                 aggregate_type=BOOKING_AGGREGATE_TYPE,
                 aggregate_id=booking.id,
                 event_type=BookingEventType.CREATED.value,
-                payload=_event_of(booking),
+                payload=_event_of(booking, timezone=offering.salon.timezone),
             )
             await self._idempotency.remember(
                 user_id=caller_id,
@@ -285,7 +285,7 @@ def _booking_of(
     )
 
 
-def _event_of(booking: Booking) -> BookingCreated:
+def _event_of(booking: Booking, *, timezone: str) -> BookingCreated:
     return BookingCreated(
         booking_id=booking.id,
         salon_id=booking.salon_id,
@@ -300,4 +300,5 @@ def _event_of(booking: Booking) -> BookingCreated:
         status=booking.status.value,
         reminder_at=booking.reminder_at,
         created_by=booking.created_by,
+        timezone=timezone,
     )

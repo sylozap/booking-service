@@ -9,6 +9,10 @@ cancels.
 ``auth``, and ``notification`` keeps its own table of recipients filled from
 ``auth.users.v1``. An event carries the data of its own aggregate and nothing
 else.
+
+``timezone`` is the salon's IANA zone, so a message can say "15:00" where the
+client lives rather than "12:00 UTC". Optional: booking may not know the zone
+of a master it never had settings for.
 """
 
 from __future__ import annotations
@@ -31,6 +35,8 @@ __all__ = [
     "BookingNoShow",
     "BookingRescheduled",
     "CancelledBy",
+    "ReminderDue",
+    "ReminderEventType",
 ]
 
 BOOKINGS_TOPIC = "booking.bookings.v1"
@@ -87,6 +93,7 @@ class BookingCreated(BaseModel):
     # Who made it: the client themselves, or an admin of the salon who booked
     # on their behalf -- which changes how the client is told.
     created_by: UUID | None = None
+    timezone: str | None = None
 
 
 class CancelledBy(StrEnum):
@@ -117,6 +124,7 @@ class BookingCancelled(BaseModel):
 
     cancelled_by: CancelledBy
     reason: str | None = None
+    timezone: str | None = None
 
 
 class BookingRescheduled(BaseModel):
@@ -139,6 +147,7 @@ class BookingRescheduled(BaseModel):
     start_at: AwareDatetime
     end_at: AwareDatetime
     reminder_at: datetime | None = None
+    timezone: str | None = None
 
 
 class _VisitClosed(BaseModel):
@@ -154,6 +163,7 @@ class _VisitClosed(BaseModel):
     service_name: str
     start_at: AwareDatetime
     end_at: AwareDatetime
+    timezone: str | None = None
 
 
 class BookingCompleted(_VisitClosed):
@@ -162,3 +172,32 @@ class BookingCompleted(_VisitClosed):
 
 class BookingNoShow(_VisitClosed):
     """The client did not come. The time stays taken all the same."""
+
+
+class ReminderEventType(StrEnum):
+    """``event_type`` of ``booking.reminders.v1``."""
+
+    DUE = "reminder.due"
+
+
+class ReminderDue(BaseModel):
+    """A visit is coming up, and the client is to be reminded of it.
+
+    Published by the scheduler of booking once ``reminder_at`` arrives, which is
+    ``hours_before`` hours ahead of ``start_at``. A cancelled booking never
+    gets one; a moved booking gets one for its new time. Everything a message
+    needs travels here, as in the events of the booking itself.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    booking_id: UUID
+    salon_id: UUID
+    master_id: UUID
+    client_user_id: UUID
+
+    service_name: str
+    start_at: AwareDatetime
+    end_at: AwareDatetime
+    hours_before: int
+    timezone: str | None = None

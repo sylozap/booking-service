@@ -182,12 +182,12 @@ class RescheduleBooking:
                 aggregate_type=BOOKING_AGGREGATE_TYPE,
                 aggregate_id=saved.id,
                 event_type=BookingEventType.RESCHEDULED.value,
-                payload=_event_of(booking, saved),
+                payload=_event_of(booking, saved, timezone=offering.salon.timezone),
             )
         return booking, saved
 
 
-def _event_of(previous: Booking, moved: Booking) -> BookingRescheduled:
+def _event_of(previous: Booking, moved: Booking, *, timezone: str) -> BookingRescheduled:
     return BookingRescheduled(
         booking_id=moved.id,
         salon_id=moved.salon_id,
@@ -199,4 +199,5 @@ def _event_of(previous: Booking, moved: Booking) -> BookingRescheduled:
         start_at=moved.start_at,
         end_at=moved.end_at,
         reminder_at=moved.reminder_at,
+        timezone=timezone,
     )

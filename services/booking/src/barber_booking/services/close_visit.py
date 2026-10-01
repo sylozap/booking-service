@@ -66,7 +66,7 @@ class CloseVisit:
                 return booking_response(booking)
 
             saved = await self._bookings.save(closed)
-            event_type, payload = _event_of(saved)
+            event_type, payload = _event_of(saved, timezone=master.timezone if master else None)
             await self._outbox.add(
                 topic=BOOKINGS_TOPIC,
                 aggregate_type=BOOKING_AGGREGATE_TYPE,
@@ -79,7 +79,9 @@ class CloseVisit:
         return booking_response(saved)
 
 
-def _event_of(booking: Booking) -> tuple[BookingEventType, BookingCompleted | BookingNoShow]:
+def _event_of(
+    booking: Booking, *, timezone: str | None
+) -> tuple[BookingEventType, BookingCompleted | BookingNoShow]:
     completed = booking.status is BookingStatus.COMPLETED
     payload_type = BookingCompleted if completed else BookingNoShow
     payload = payload_type(
@@ -90,5 +92,6 @@ def _event_of(booking: Booking) -> tuple[BookingEventType, BookingCompleted | Bo
         service_name=booking.service.name,
         start_at=booking.start_at,
         end_at=booking.end_at,
+        timezone=timezone,
     )
     return (BookingEventType.COMPLETED if completed else BookingEventType.NO_SHOW), payload

@@ -38,8 +38,8 @@ class IssuedConfirmation:
     """The token that has to reach the address, and when it stops working.
 
     The token is returned rather than stored: the database keeps only its hash,
-    so this is the one moment the plain value exists, and it exists only long
-    enough to be handed to the mailer.
+    so this is the one moment the plain value exists outside the event that
+    carries it to ``notification``.
     """
 
     token: str

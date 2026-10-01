@@ -246,6 +246,7 @@ async def test_each_cancellation_is_announced_once_and_names_its_cause(
     assert {event.causation_id for event in events} == {cause}
     assert {event.payload["cancelled_by"] for event in events} == {"salon"}
     assert {event.payload["reason"] for event in events} == {"master_deactivated"}
+    assert {event.payload["timezone"] for event in events} == {master.timezone}
 
 
 async def test_a_redelivered_deactivation_changes_nothing_and_announces_nothing(
