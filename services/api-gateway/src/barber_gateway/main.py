@@ -12,6 +12,7 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from fastapi import FastAPI
 
 from barber_common.app import create_app
+from barber_common.auth import jwks_verifier, refreshing, use_authentication
 from barber_common.http import Timeouts
 from barber_gateway.api.proxied import router as proxied_router
 from barber_gateway.api.v1.router import router
@@ -32,9 +33,15 @@ def create_application(settings: GatewaySettings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        # The keys of auth, cached and refreshed. Fetched lazily, so auth being
+        # down delays the first verification instead of stopping the start.
+        jwks, verifier = jwks_verifier(resolved)
+
         async with AsyncExitStack() as stack:
             app.state.proxy = build_proxy(resolved)
             stack.push_async_callback(app.state.proxy.aclose)
+            await stack.enter_async_context(refreshing(jwks))
+            use_authentication(app, verifier)
             yield
 
     return create_app(

@@ -10,11 +10,17 @@ is the real code.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Awaitable, Callable
+from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
 import httpx
+import jwt
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import FastAPI
 
+from barber_common.auth import ACCESS_TOKEN_TYPE, StaticKeys, TokenVerifier, use_authentication
 from barber_common.config import Environment
 from barber_common.http import Timeouts
 from barber_common.testing.fixtures import app_client
@@ -26,6 +32,13 @@ from barber_gateway.settings import GatewaySettings
 UPSTREAM_URLS = {upstream: f"http://{upstream.value}" for upstream in Upstream}
 
 ServiceHandler = Callable[[httpx.Request], Awaitable[httpx.Response]]
+# Builds the Authorization header of a caller; keyword arguments override claims.
+BearerFactory = Callable[..., dict[str, str]]
+
+ISSUER = "https://barber.local/auth"
+KID = "gateway-test-key"
+# The smallest size the verifier accepts; generated per run, never stored.
+TEST_KEY_SIZE_BITS = 2048
 
 
 def build_settings(**overrides: object) -> GatewaySettings:
@@ -113,15 +126,68 @@ def proxy(services: FakeServices) -> Proxy:
     return Proxy(base_urls=UPSTREAM_URLS, timeouts=Timeouts(), transport=services.transport())
 
 
+@pytest.fixture(scope="session")
+def signing_key() -> rsa.RSAPrivateKey:
+    """The throwaway key this run signs its tokens with."""
+    return rsa.generate_private_key(public_exponent=65537, key_size=TEST_KEY_SIZE_BITS)
+
+
 @pytest.fixture
-def app(settings: GatewaySettings, proxy: Proxy) -> FastAPI:
-    """The real gateway, with the fake services wired in place of the lifespan."""
+def bearer(signing_key: rsa.RSAPrivateKey) -> BearerFactory:
+    """Authorization headers of callers; a client of the platform by default."""
+
+    def build(*, key: rsa.RSAPrivateKey | None = None, **overrides: object) -> dict[str, str]:
+        now = datetime.now(UTC)
+        claims: dict[str, object] = {
+            "sub": str(uuid4()),
+            "typ": ACCESS_TOKEN_TYPE,
+            "roles": [{"role": "client", "salon_id": None}],
+            "iss": ISSUER,
+            "jti": str(uuid4()),
+            "iat": now,
+            "exp": now + timedelta(minutes=15),
+        }
+        claims.update(overrides)
+        token = jwt.encode(claims, key or signing_key, algorithm="RS256", headers={"kid": KID})
+        return {"Authorization": f"Bearer {token}"}
+
+    return build
+
+
+@pytest.fixture
+def app(settings: GatewaySettings, proxy: Proxy, signing_key: rsa.RSAPrivateKey) -> FastAPI:
+    """The real gateway, with the fake services wired in place of the lifespan.
+
+    Tokens are real and really verified, against the public half of the key
+    this run signs with.
+    """
     application = create_application(settings)
     application.state.proxy = proxy
+    public_pem = (
+        signing_key.public_key()
+        .public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        .decode("ascii")
+    )
+    use_authentication(
+        application,
+        TokenVerifier(keys=StaticKeys.from_pem(kid=KID, public_pem=public_pem), issuer=ISSUER),
+    )
     return application
 
 
 @pytest.fixture
 async def client(app: FastAPI) -> AsyncIterator[httpx.AsyncClient]:
+    """A stranger: no token."""
     async with app_client(app) as client:
+        yield client
+
+
+@pytest.fixture
+async def user_client(app: FastAPI, bearer: BearerFactory) -> AsyncIterator[httpx.AsyncClient]:
+    """A signed-in client of the platform, for requests about something else."""
+    async with app_client(app) as client:
+        client.headers.update(bearer())
         yield client
