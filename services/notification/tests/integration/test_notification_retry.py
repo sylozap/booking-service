@@ -24,6 +24,7 @@ from barber_common.metrics import REGISTRY
 from barber_common.outbox.models import OutboxMessage
 from barber_notification.models.notification import Notification
 from barber_notification.models.recipient import Recipient
+from barber_notification.preferences import NotificationKind
 from barber_notification.providers.base import Channel, DeliveryResult, Message
 from barber_notification.services.dispatch import EnqueueNotification
 from barber_notification.workers.delivery import DeliveryWorker
@@ -58,6 +59,7 @@ async def queue(session: AsyncSession, user_id: UUID) -> UUID:
         event_id=event_id,
         topic=BOOKINGS_TOPIC,
         user_id=user_id,
+        kind=NotificationKind.BOOKINGS,
         template="booking_created",
         fields=FIELDS,
     )

@@ -15,13 +15,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import Request
 
 from barber_common.db.session import get_session
+from barber_notification.services.preferences import ReadPreferences, UpdatePreferences
 from barber_notification.services.telegram_link import IssueTelegramLinkCode, UnlinkTelegram
 from barber_notification.settings import NotificationSettings
 
 __all__ = [
     "IssueTelegramLinkCodeScenario",
+    "ReadPreferencesScenario",
     "SessionDependency",
     "UnlinkTelegramScenario",
+    "UpdatePreferencesScenario",
 ]
 
 SessionDependency = Annotated[AsyncSession, Depends(get_session)]
@@ -56,3 +59,15 @@ IssueTelegramLinkCodeScenario = Annotated[
     IssueTelegramLinkCode, Depends(build_issue_telegram_link_code)
 ]
 UnlinkTelegramScenario = Annotated[UnlinkTelegram, Depends(build_unlink_telegram)]
+
+
+def build_read_preferences(session: SessionDependency) -> ReadPreferences:
+    return ReadPreferences(session)
+
+
+def build_update_preferences(session: SessionDependency) -> UpdatePreferences:
+    return UpdatePreferences(session)
+
+
+ReadPreferencesScenario = Annotated[ReadPreferences, Depends(build_read_preferences)]
+UpdatePreferencesScenario = Annotated[UpdatePreferences, Depends(build_update_preferences)]

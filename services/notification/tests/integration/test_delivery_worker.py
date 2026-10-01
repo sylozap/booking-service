@@ -31,6 +31,7 @@ from barber_notification.consumers.booking_events import (
 )
 from barber_notification.models.notification import Notification
 from barber_notification.models.recipient import Recipient
+from barber_notification.preferences import NotificationKind
 from barber_notification.providers.base import Channel, DeliveryResult, Message
 from barber_notification.repositories.recipients import RecipientRepository
 from barber_notification.services.dispatch import EnqueueNotification
@@ -74,6 +75,7 @@ async def queue(
         event_id=event_id,
         topic=BOOKINGS_TOPIC,
         user_id=user_id,
+        kind=NotificationKind.BOOKINGS,
         template=template,
         fields=fields or FIELDS,
     )

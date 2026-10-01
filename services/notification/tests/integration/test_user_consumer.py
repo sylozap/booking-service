@@ -284,7 +284,9 @@ async def test_a_confirmation_letter_is_queued_to_the_address_being_confirmed(
 async def test_the_letter_ignores_preferences_but_not_a_deactivation(
     consumer: EventConsumer, session: AsyncSession, make_recipient: RecipientFactory
 ) -> None:
-    switched_off = await make_recipient(preferences={"channels": {"email": False}})
+    switched_off = await make_recipient(
+        preferences={"bookings": {"email": False}, "reminders": {"email": False}}
+    )
     deactivated = await make_recipient(is_active=False)
 
     await consumer.handle(confirmation_requested(switched_off.user_id, email="a@example.com"))

@@ -14,6 +14,7 @@ from barber_common.events.bookings import (
     CancelledBy,
 )
 from barber_common.events.users import UserEmailConfirmationRequested
+from barber_notification.preferences import NotificationKind
 from barber_notification.providers.base import Channel
 from barber_notification.repositories.recipients import RecipientRecord
 from barber_notification.services.account_messages import confirmation_message
@@ -23,9 +24,13 @@ from barber_notification.services.booking_messages import (
     format_moment,
     rescheduled_message,
 )
-from barber_notification.services.dispatch import channel_enabled, reachable_channels
+from barber_notification.services.dispatch import reachable_channels
 
 NOON_UTC = datetime(2026, 9, 5, 12, 0, tzinfo=UTC)
+
+
+BOOKINGS = NotificationKind.BOOKINGS
+REMINDERS = NotificationKind.REMINDERS
 
 
 def recipient(**overrides: object) -> RecipientRecord:
@@ -148,27 +153,23 @@ def test_the_confirmation_letter_carries_the_link_with_the_token() -> None:
 
 
 def test_every_reachable_channel_is_used_by_default() -> None:
-    assert reachable_channels(recipient()) == [Channel.EMAIL, Channel.TELEGRAM]
+    assert reachable_channels(recipient(), BOOKINGS) == [Channel.EMAIL, Channel.TELEGRAM]
 
 
 def test_an_unconfirmed_address_is_not_written_to() -> None:
-    assert reachable_channels(recipient(email_confirmed=False)) == [Channel.TELEGRAM]
+    assert reachable_channels(recipient(email_confirmed=False), BOOKINGS) == [Channel.TELEGRAM]
 
 
 def test_without_a_linked_chat_there_is_no_telegram() -> None:
-    assert reachable_channels(recipient(telegram_chat_id=None)) == [Channel.EMAIL]
+    assert reachable_channels(recipient(telegram_chat_id=None), BOOKINGS) == [Channel.EMAIL]
 
 
-def test_a_channel_switched_off_is_not_used() -> None:
-    switched_off = recipient(preferences={"channels": {"telegram": False}})
+def test_a_channel_switched_off_for_a_kind_is_not_used_for_it() -> None:
+    switched_off = recipient(preferences={"bookings": {"telegram": False}})
 
-    assert reachable_channels(switched_off) == [Channel.EMAIL]
+    assert reachable_channels(switched_off, BOOKINGS) == [Channel.EMAIL]
+    assert reachable_channels(switched_off, REMINDERS) == [Channel.EMAIL, Channel.TELEGRAM]
 
 
 def test_a_deactivated_account_gets_nothing() -> None:
-    assert reachable_channels(recipient(is_active=False)) == []
-
-
-def test_a_preference_that_cannot_be_read_does_not_silence_the_user() -> None:
-    assert channel_enabled({"channels": "all of them"}, Channel.EMAIL) is True
-    assert channel_enabled({"channels": {"email": "no"}}, Channel.EMAIL) is True
+    assert reachable_channels(recipient(is_active=False), BOOKINGS) == []

@@ -24,6 +24,7 @@ from barber_common.events.bookings import (
 )
 from barber_common.events.envelope import JsonEnvelope
 from barber_common.kafka import EventHandler
+from barber_notification.preferences import NotificationKind
 from barber_notification.services.booking_messages import (
     TemplateAndFields,
     cancelled_message,
@@ -73,6 +74,7 @@ async def _notify(
         event_id=envelope.event_id,
         topic=BOOKINGS_TOPIC,
         user_id=client_user_id,
+        kind=NotificationKind.BOOKINGS,
         template=template,
         fields=fields,
     )

@@ -6,8 +6,9 @@ not belong inside a transaction, and the delivery worker sends what is queued.
 
 Which channels a message goes to:
 
-* every channel the recipient has not switched off and can be reached on --
-  ``email`` with a confirmed address, ``telegram`` with a linked chat;
+* every channel the recipient can be reached on -- ``email`` with a confirmed
+  address, ``telegram`` with a linked chat -- and has not switched off for
+  this kind of notification;
 * a message the platform must deliver whatever the preferences -- the
   confirmation letter -- goes to the one address its event names.
 
@@ -24,31 +25,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from barber_common.db.session import transaction
 from barber_common.logging import get_logger
+from barber_notification.preferences import NotificationKind, Preferences
 from barber_notification.providers.base import Channel
 from barber_notification.rendering import render
 from barber_notification.repositories.notifications import NotificationRepository
 from barber_notification.repositories.recipients import RecipientRecord, RecipientRepository
 
-__all__ = ["EnqueueNotification", "channel_enabled", "reachable_channels"]
+__all__ = ["EnqueueNotification", "reachable_channels"]
 
 _logger = get_logger(__name__)
 
 
-def channel_enabled(preferences: dict[str, object], channel: Channel) -> bool:
-    """Whether the user left this channel on. Everything is on until switched off.
-
-    ``{"channels": {"telegram": false}}`` switches Telegram off. Anything that
-    is not a plain ``false`` leaves the channel on: a preference this code
-    cannot read must not silence a user.
-    """
-    channels = preferences.get("channels")
-    if not isinstance(channels, dict):
-        return True
-    return channels.get(channel.value) is not False
-
-
-def reachable_channels(recipient: RecipientRecord) -> list[Channel]:
-    """The channels a message to this recipient goes to, in a fixed order."""
+def reachable_channels(recipient: RecipientRecord, kind: NotificationKind) -> list[Channel]:
+    """The channels a message of this kind to this recipient goes to, in a fixed order."""
     if not recipient.is_active:
         return []
     reachable: list[Channel] = []
@@ -56,7 +45,8 @@ def reachable_channels(recipient: RecipientRecord) -> list[Channel]:
         reachable.append(Channel.EMAIL)
     if recipient.telegram_chat_id is not None:
         reachable.append(Channel.TELEGRAM)
-    return [channel for channel in reachable if channel_enabled(recipient.preferences, channel)]
+    preferences = Preferences.from_stored(recipient.preferences)
+    return [channel for channel in reachable if preferences.allows(kind, channel)]
 
 
 class EnqueueNotification:
@@ -73,6 +63,7 @@ class EnqueueNotification:
         event_id: UUID,
         topic: str,
         user_id: UUID,
+        kind: NotificationKind,
         template: str,
         fields: dict[str, object],
     ) -> list[Channel]:
@@ -91,7 +82,7 @@ class EnqueueNotification:
                 )
                 return []
 
-            channels = reachable_channels(recipient)
+            channels = reachable_channels(recipient, kind)
             await self._queue(
                 event_id=event_id,
                 topic=topic,

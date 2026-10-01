@@ -35,6 +35,7 @@ from barber_notification.consumers.booking_events import (
 )
 from barber_notification.models.notification import Notification
 from barber_notification.models.recipient import Recipient
+from barber_notification.preferences import NotificationKind
 from barber_notification.services.dispatch import EnqueueNotification
 
 pytestmark = pytest.mark.integration
@@ -208,6 +209,7 @@ async def test_the_dedup_key_holds_even_past_the_processed_events(
         event_id=event_id,
         topic=BOOKINGS_TOPIC,
         user_id=client.user_id,
+        kind=NotificationKind.BOOKINGS,
         template="booking_created",
         fields=fields,
     )
@@ -215,6 +217,7 @@ async def test_the_dedup_key_holds_even_past_the_processed_events(
         event_id=event_id,
         topic=BOOKINGS_TOPIC,
         user_id=client.user_id,
+        kind=NotificationKind.BOOKINGS,
         template="booking_created",
         fields=fields,
     )
@@ -237,7 +240,7 @@ async def test_a_channel_the_client_switched_off_is_not_used(
     consumer: EventConsumer, session: AsyncSession, make_recipient: RecipientFactory
 ) -> None:
     client = await make_recipient(
-        telegram_chat_id=42, preferences={"channels": {"telegram": False}}
+        telegram_chat_id=42, preferences={"bookings": {"telegram": False}}
     )
 
     await consumer.handle(created(client.user_id))
