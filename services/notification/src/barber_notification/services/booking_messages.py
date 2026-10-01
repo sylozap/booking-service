@@ -15,6 +15,7 @@ from barber_common.events.bookings import (
     BookingCreated,
     BookingRescheduled,
     CancelledBy,
+    ReminderDue,
 )
 
 __all__ = [
@@ -22,6 +23,7 @@ __all__ = [
     "cancelled_message",
     "created_message",
     "format_moment",
+    "reminder_message",
     "rescheduled_message",
 ]
 
@@ -66,6 +68,14 @@ def cancelled_message(event: BookingCancelled) -> TemplateAndFields:
         else "booking_cancelled_by_salon"
     )
     return template, {
+        "service_name": event.service_name,
+        "start_at": format_moment(event.start_at, event.timezone),
+    }
+
+
+def reminder_message(event: ReminderDue) -> TemplateAndFields:
+    """The visit at its time, not "in four hours": a late reminder must not lie."""
+    return "booking_reminder", {
         "service_name": event.service_name,
         "start_at": format_moment(event.start_at, event.timezone),
     }

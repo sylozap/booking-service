@@ -12,16 +12,19 @@ from barber_common.events.bookings import (
     BookingCreated,
     BookingRescheduled,
     CancelledBy,
+    ReminderDue,
 )
 from barber_common.events.users import UserEmailConfirmationRequested
 from barber_notification.preferences import NotificationKind
 from barber_notification.providers.base import Channel
+from barber_notification.rendering import render
 from barber_notification.repositories.recipients import RecipientRecord
 from barber_notification.services.account_messages import confirmation_message
 from barber_notification.services.booking_messages import (
     cancelled_message,
     created_message,
     format_moment,
+    reminder_message,
     rescheduled_message,
 )
 from barber_notification.services.dispatch import reachable_channels
@@ -147,6 +150,26 @@ def test_the_confirmation_letter_carries_the_link_with_the_token() -> None:
     assert template == "email_confirmation"
     assert fields["link"] == "http://x/confirm?token=a%2Bb%2Fc%3D"
     assert fields["expires_at"] == "06.09.2026 14:31 (UTC)"
+
+
+def test_a_reminder_names_the_visit_at_its_local_time() -> None:
+    event = ReminderDue(
+        booking_id=uuid4(),
+        salon_id=uuid4(),
+        master_id=uuid4(),
+        client_user_id=uuid4(),
+        service_name="Стрижка",
+        start_at=NOON_UTC,
+        end_at=NOON_UTC + timedelta(minutes=45),
+        hours_before=4,
+        timezone="Europe/Moscow",
+    )
+
+    template, fields = reminder_message(event)
+
+    assert template == "booking_reminder"
+    assert fields == {"service_name": "Стрижка", "start_at": "05.09.2026 15:00 (Europe/Moscow)"}
+    assert "05.09.2026 15:00 (Europe/Moscow)" in render(template, fields).body
 
 
 # --- channels ---------------------------------------------------------------

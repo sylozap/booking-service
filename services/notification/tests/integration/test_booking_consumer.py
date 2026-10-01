@@ -19,12 +19,15 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from barber_common.events.bookings import (
     BOOKINGS_TOPIC,
+    REMINDERS_TOPIC,
     BookingCancelled,
     BookingCompleted,
     BookingCreated,
     BookingEventType,
     BookingRescheduled,
     CancelledBy,
+    ReminderDue,
+    ReminderEventType,
 )
 from barber_common.events.envelope import build_envelope
 from barber_common.kafka import EventConsumer, ProcessingResult, RetryPolicy
@@ -45,13 +48,15 @@ RecipientFactory = Callable[..., Awaitable[Recipient]]
 START_AT = datetime(2026, 9, 5, 12, 0, tzinfo=UTC)
 
 
-def record(event_type: str, payload: BaseModel) -> ConsumerRecord[bytes, bytes]:
+def record(
+    event_type: str, payload: BaseModel, *, topic: str = BOOKINGS_TOPIC
+) -> ConsumerRecord[bytes, bytes]:
     envelope = build_envelope(
         event_type=event_type, payload=payload.model_dump(mode="json"), producer="booking@test"
     )
     value = envelope.model_dump_json().encode("utf-8")
     return ConsumerRecord(
-        topic=BOOKINGS_TOPIC,
+        topic=topic,
         partition=0,
         offset=0,
         timestamp=0,
@@ -115,6 +120,24 @@ def cancelled(client_user_id: UUID, by: CancelledBy) -> ConsumerRecord[bytes, by
             end_at=START_AT + timedelta(minutes=45),
             cancelled_by=by,
         ),
+    )
+
+
+def reminder(client_user_id: UUID) -> ConsumerRecord[bytes, bytes]:
+    return record(
+        ReminderEventType.DUE,
+        ReminderDue(
+            booking_id=uuid4(),
+            salon_id=uuid4(),
+            master_id=uuid4(),
+            client_user_id=client_user_id,
+            service_name="Стрижка",
+            start_at=START_AT,
+            end_at=START_AT + timedelta(minutes=45),
+            hours_before=4,
+            timezone="Europe/Moscow",
+        ),
+        topic=REMINDERS_TOPIC,
     )
 
 
@@ -276,3 +299,44 @@ async def test_a_closed_visit_is_no_message(
 
     assert result is ProcessingResult.SKIPPED
     assert await queued_for(session, client.user_id) == []
+
+
+async def test_a_reminder_is_queued_on_every_channel_of_the_client(
+    consumer: EventConsumer, session: AsyncSession, make_recipient: RecipientFactory
+) -> None:
+    client = await make_recipient(telegram_chat_id=42)
+
+    result = await consumer.handle(reminder(client.user_id))
+
+    assert result is ProcessingResult.OK
+    rows = await queued_for(session, client.user_id)
+    assert [(row.channel, row.template, row.topic) for row in rows] == [
+        ("email", "booking_reminder", REMINDERS_TOPIC),
+        ("telegram", "booking_reminder", REMINDERS_TOPIC),
+    ]
+    assert rows[0].payload["start_at"] == "05.09.2026 15:00 (Europe/Moscow)"
+
+
+async def test_a_redelivered_reminder_queues_nothing_more(
+    consumer: EventConsumer, session: AsyncSession, make_recipient: RecipientFactory
+) -> None:
+    client = await make_recipient()
+    message = reminder(client.user_id)
+
+    first = await consumer.handle(message)
+    second = await consumer.handle(message)
+
+    assert (first, second) == (ProcessingResult.OK, ProcessingResult.DUPLICATE)
+    assert len(await queued_for(session, client.user_id)) == 1
+
+
+async def test_reminders_switched_off_leave_booking_messages_on(
+    consumer: EventConsumer, session: AsyncSession, make_recipient: RecipientFactory
+) -> None:
+    client = await make_recipient(preferences={"reminders": {"email": False}})
+
+    await consumer.handle(reminder(client.user_id))
+    await consumer.handle(created(client.user_id))
+
+    rows = await queued_for(session, client.user_id)
+    assert [row.template for row in rows] == ["booking_created"]
