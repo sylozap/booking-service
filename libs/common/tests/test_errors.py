@@ -14,6 +14,7 @@ from barber_common.errors import (
     PROBLEM_CONTENT_TYPE,
     DomainError,
     RateLimited,
+    document_problem_responses,
     install_error_handlers,
 )
 
@@ -176,3 +177,21 @@ async def test_unknown_route_becomes_a_problem_document(
 
     assert response.status_code == 404
     assert response.json()["code"] == "not_found"
+
+
+async def test_the_openapi_document_describes_errors_as_they_are_sent() -> None:
+    app = build_app()
+    document_problem_responses(app)
+
+    document = app.openapi()
+
+    paths = document["paths"]
+    invalid = paths["/bookings"]["post"]["responses"]["422"]
+    assert set(invalid["content"]) == {PROBLEM_CONTENT_TYPE}
+    assert invalid["content"][PROBLEM_CONTENT_TYPE]["schema"] == {
+        "$ref": "#/components/schemas/Problem"
+    }
+    schemas = document["components"]["schemas"]
+    assert "Problem" in schemas
+    assert "HTTPValidationError" not in schemas
+    assert "ValidationError" not in schemas

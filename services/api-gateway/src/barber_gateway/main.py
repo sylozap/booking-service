@@ -15,10 +15,13 @@ from barber_common.app import create_app
 from barber_common.auth import jwks_verifier, refreshing, use_authentication
 from barber_common.cache import cache_from_dsn
 from barber_common.http import ServiceClient, Timeouts
+from barber_gateway.api.docs import router as docs_router
 from barber_gateway.api.proxied import router as proxied_router
 from barber_gateway.api.v1.router import router
 from barber_gateway.clients.booking import BookingClient
 from barber_gateway.clients.catalog import CatalogClient
+from barber_gateway.clients.openapi import OpenApiClient
+from barber_gateway.openapi import PlatformDocument
 from barber_gateway.proxy import Proxy
 from barber_gateway.rate_limit import Limit, LimitScope, RateLimitPolicy, SlidingWindowLimiter
 from barber_gateway.routing import Upstream
@@ -57,23 +60,34 @@ def create_application(settings: GatewaySettings | None = None) -> FastAPI:
             )
             stack.push_async_callback(app.state.rate_limiter.aclose)
 
-            # The card of a master reads catalog and booking as a client, with
-            # retries of its GETs and breakers of its own, apart from the proxy.
-            catalog_http = ServiceClient(base_url=resolved.catalog_url, upstream="catalog")
-            booking_http = ServiceClient(base_url=resolved.booking_url, upstream="booking")
-            stack.push_async_callback(catalog_http.aclose)
-            stack.push_async_callback(booking_http.aclose)
-            app.state.catalog = CatalogClient(http=catalog_http)
-            app.state.booking = BookingClient(http=booking_http)
+            # The card of a master and the merged OpenAPI document read the
+            # services as a client, with retries of their GETs and breakers of
+            # their own, apart from the proxy.
+            clients = {
+                upstream: ServiceClient(base_url=base_url, upstream=upstream.value)
+                for upstream, base_url in _base_urls(resolved).items()
+            }
+            for http in clients.values():
+                stack.push_async_callback(http.aclose)
+            app.state.catalog = CatalogClient(http=clients[Upstream.CATALOG])
+            app.state.booking = BookingClient(http=clients[Upstream.BOOKING])
+            app.state.openapi = PlatformDocument(
+                gateway=app.openapi,
+                documents=OpenApiClient(http=clients),
+                ttl_seconds=resolved.openapi_cache_ttl_seconds,
+            )
             yield
 
     application = create_app(
         resolved,
         # The router of the gateway's own endpoints comes first: the proxy
         # takes every /api path that reaches it.
-        routers=[router, proxied_router],
+        routers=[docs_router, router, proxied_router],
         lifespan=lifespan,
         title="Barber API Gateway",
+        # The gateway serves the document of the whole platform instead, at the
+        # same address; see api/docs.py.
+        openapi_url=None,
     )
     application.state.rate_limits = rate_limit_policy(resolved)
     return application

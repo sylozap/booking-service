@@ -26,7 +26,9 @@ from barber_common.http import RetryPolicy, ServiceClient, Timeouts
 from barber_common.testing.fixtures import app_client
 from barber_gateway.clients.booking import BookingClient
 from barber_gateway.clients.catalog import CatalogClient
+from barber_gateway.clients.openapi import OpenApiClient
 from barber_gateway.main import create_application
+from barber_gateway.openapi import PlatformDocument
 from barber_gateway.proxy import Proxy
 from barber_gateway.rate_limit import SlidingWindowLimiter
 from barber_gateway.routing import Upstream
@@ -175,6 +177,13 @@ def app(
     application.state.rate_limiter = SlidingWindowLimiter.disabled()
     application.state.catalog = CatalogClient(http=_service_client(Upstream.CATALOG, services))
     application.state.booking = BookingClient(http=_service_client(Upstream.BOOKING, services))
+    application.state.openapi = PlatformDocument(
+        gateway=application.openapi,
+        documents=OpenApiClient(
+            http={upstream: _service_client(upstream, services) for upstream in Upstream}
+        ),
+        ttl_seconds=settings.openapi_cache_ttl_seconds,
+    )
     public_pem = (
         signing_key.public_key()
         .public_bytes(

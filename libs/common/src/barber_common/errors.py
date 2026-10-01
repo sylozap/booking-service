@@ -8,11 +8,13 @@ subclasses, and the ``api`` layer turns them into responses.
 from __future__ import annotations
 
 import http
+import json
 from collections.abc import Mapping
 from typing import ClassVar
 
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
+from pydantic import BaseModel, ConfigDict, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
@@ -22,19 +24,29 @@ from barber_common.logging import get_logger
 
 __all__ = [
     "PROBLEM_CONTENT_TYPE",
+    "PROBLEM_SCHEMA_NAME",
     "DomainError",
     "Forbidden",
     "InternalError",
     "NotFound",
+    "Problem",
     "RateLimited",
     "Unauthorized",
     "ValidationFailed",
+    "describe_problem_responses",
+    "document_problem_responses",
     "install_error_handlers",
     "problem_document",
+    "problem_response",
 ]
 
 PROBLEM_CONTENT_TYPE = "application/problem+json"
+PROBLEM_SCHEMA_NAME = "Problem"
 ERROR_TYPE_BASE = "https://barber.local/errors/"
+
+# What FastAPI documents a 422 with. The body is never that -- it is a
+# problem+json -- so the schemas go once nothing refers to them any more.
+_FASTAPI_ERROR_SCHEMAS = ("HTTPValidationError", "ValidationError")
 
 _logger = get_logger(__name__)
 
@@ -292,3 +304,97 @@ def install_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(RequestValidationError, _validation_error_handler)
     app.add_exception_handler(StarletteHTTPException, _http_exception_handler)
     app.add_exception_handler(Exception, _unhandled_error_handler)
+
+
+class Problem(BaseModel):
+    """The body of every error, as the OpenAPI document describes it.
+
+    Only for the document: responses are built by :func:`problem_document`.
+    Further fields are allowed, because an error carries its own --
+    ``alternatives`` of ``slot_taken``, ``violations`` of ``validation_error``.
+    """
+
+    model_config = ConfigDict(extra="allow", title=PROBLEM_SCHEMA_NAME)
+
+    type: str = Field(description="Documentation URI of the error code.")
+    title: str
+    status: int
+    code: str = Field(description="Domain code, the field to branch on.")
+    detail: str
+    instance: str | None = Field(description="The path of the request that failed.")
+    correlation_id: str | None = Field(description="Quote it when reporting the failure.")
+
+
+def problem_response(description: str) -> dict[str, object]:
+    """An OpenAPI response object whose body is a :class:`Problem`."""
+    return {
+        "description": description,
+        "content": {
+            PROBLEM_CONTENT_TYPE: {
+                "schema": {"$ref": f"#/components/schemas/{PROBLEM_SCHEMA_NAME}"}
+            }
+        },
+    }
+
+
+def describe_problem_responses(document: dict[str, object]) -> None:
+    """Make every error response of an OpenAPI document say what it returns.
+
+    FastAPI documents a ``422`` with its own ``HTTPValidationError`` as
+    ``application/json``, and an error declared by ``responses=`` with no body
+    at all. Neither is what leaves the service. Every ``4xx`` and ``5xx``
+    becomes a ``problem+json`` of :class:`Problem`, keeping its description.
+    """
+    for operation in _operations(document):
+        responses = operation.get("responses")
+        if not isinstance(responses, dict):
+            continue
+        for status, response in responses.items():
+            if str(status)[:1] in {"4", "5"} and isinstance(response, dict):
+                description = response.get("description")
+                responses[status] = problem_response(
+                    description if isinstance(description, str) else "Error"
+                )
+
+    components = document.setdefault("components", {})
+    if not isinstance(components, dict):  # pragma: no cover - FastAPI writes a dict
+        return
+    schemas = components.setdefault("schemas", {})
+    if not isinstance(schemas, dict):  # pragma: no cover
+        return
+    schemas[PROBLEM_SCHEMA_NAME] = Problem.model_json_schema()
+
+    # In order: HTTPValidationError is what refers to ValidationError.
+    for name in _FASTAPI_ERROR_SCHEMAS:
+        if f'"#/components/schemas/{name}"' not in json.dumps(document):
+            schemas.pop(name, None)
+
+
+def document_problem_responses(app: FastAPI) -> None:
+    """Have the OpenAPI document of the application describe errors truly.
+
+    Wraps the generator, so the document is still built once and cached by
+    FastAPI as before.
+    """
+    generate = app.openapi
+
+    def openapi() -> dict[str, object]:
+        if app.openapi_schema is None:
+            describe_problem_responses(generate())
+        return app.openapi_schema or {}
+
+    # FastAPI documents this hook as the place to customise the document.
+    app.openapi = openapi  # type: ignore[method-assign]
+
+
+def _operations(document: Mapping[str, object]) -> list[dict[str, object]]:
+    paths = document.get("paths")
+    if not isinstance(paths, dict):
+        return []
+    return [
+        operation
+        for item in paths.values()
+        if isinstance(item, dict)
+        for operation in item.values()
+        if isinstance(operation, dict)
+    ]

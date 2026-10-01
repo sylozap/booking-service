@@ -57,3 +57,8 @@ class GatewaySettings(BaseAppSettings):
     # shown. The window cannot exceed what availability answers, two weeks.
     card_slots_window_days: int = Field(default=7, ge=1, le=13)
     card_slots_limit: int = Field(default=10, ge=1)
+
+    # --- the merged OpenAPI document ---------------------------------------
+    # How long a complete document is served from memory before the services
+    # are asked again. An incomplete one is never cached.
+    openapi_cache_ttl_seconds: float = 300.0

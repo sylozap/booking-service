@@ -19,7 +19,7 @@ from fastapi import APIRouter, FastAPI
 
 from barber_common.config import BaseAppSettings
 from barber_common.db.session import Database
-from barber_common.errors import install_error_handlers
+from barber_common.errors import document_problem_responses, install_error_handlers
 from barber_common.health import HealthRegistry, create_health_router, database_check
 from barber_common.logging import configure_logging, get_logger
 from barber_common.metrics import instrument_app
@@ -106,6 +106,7 @@ def create_app(
     app.state.requests = tracker
 
     install_error_handlers(app)
+    document_problem_responses(app)
     app.include_router(
         create_health_router(health, timeout_seconds=settings.health_check_timeout_seconds)
     )
