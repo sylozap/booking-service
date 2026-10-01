@@ -36,6 +36,10 @@ class BookingSettings(BaseAppSettings):
     # How long before the appointment the client is reminded. Written into the
     # booking when it is created, and recomputed on every reschedule.
     reminder_lead_hours: int = 4
+    # How often the scheduler looks for due reminders, and how many bookings
+    # one pass takes. A full batch is followed by the next one at once.
+    reminder_scheduler_interval_seconds: float = 60.0
+    reminder_scheduler_batch_size: int = 100
 
     # Availability is cached far shorter than the catalog: it changes whenever
     # anyone books, and a minute is the staleness a client can be shown.

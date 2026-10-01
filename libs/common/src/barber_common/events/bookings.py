@@ -35,6 +35,8 @@ __all__ = [
     "BookingNoShow",
     "BookingRescheduled",
     "CancelledBy",
+    "ReminderDue",
+    "ReminderEventType",
 ]
 
 BOOKINGS_TOPIC = "booking.bookings.v1"
@@ -170,3 +172,32 @@ class BookingCompleted(_VisitClosed):
 
 class BookingNoShow(_VisitClosed):
     """The client did not come. The time stays taken all the same."""
+
+
+class ReminderEventType(StrEnum):
+    """``event_type`` of ``booking.reminders.v1``."""
+
+    DUE = "reminder.due"
+
+
+class ReminderDue(BaseModel):
+    """A visit is coming up, and the client is to be reminded of it.
+
+    Published by the scheduler of booking once ``reminder_at`` arrives, which is
+    ``hours_before`` hours ahead of ``start_at``. A cancelled booking never
+    gets one; a moved booking gets one for its new time. Everything a message
+    needs travels here, as in the events of the booking itself.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    booking_id: UUID
+    salon_id: UUID
+    master_id: UUID
+    client_user_id: UUID
+
+    service_name: str
+    start_at: AwareDatetime
+    end_at: AwareDatetime
+    hours_before: int
+    timezone: str | None = None

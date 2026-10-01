@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import datetime
 
 from sqlalchemy import ColumnElement, Select, false, or_, select, true, tuple_, update
@@ -23,7 +24,13 @@ from barber_common.db.errors import (
 )
 from barber_common.pagination import InvalidCursor, PageRequest, cursor_uuid
 
-__all__ = ["BOOKING_CURSOR_ARITY", "BookingRepository", "booking_cursor", "is_overlap"]
+__all__ = [
+    "BOOKING_CURSOR_ARITY",
+    "BookingRepository",
+    "DueReminder",
+    "booking_cursor",
+    "is_overlap",
+]
 
 # A listing is ordered by ``(start_at, id)``: the start is what a person reads
 # a list of appointments by, and the id makes the order total.
@@ -45,6 +52,14 @@ def is_overlap(error: IntegrityError) -> bool:
         sqlstate_of(error) == SQLSTATE_EXCLUSION_VIOLATION
         and constraint_name_of(error) == OVERLAP_CONSTRAINT
     )
+
+
+@dataclass(frozen=True, slots=True)
+class DueReminder:
+    """A booking whose reminder is due, with the zone of its salon if known."""
+
+    booking: Booking
+    timezone: str | None
 
 
 def _to_domain(row: BookingRow) -> Booking:
@@ -152,6 +167,42 @@ class BookingRepository:
         )
         rows = (await self._session.execute(statement)).scalars().all()
         return [_to_domain(row) for row in rows]
+
+    async def claim_due_reminders(self, *, now: datetime, limit: int) -> list[DueReminder]:
+        """Up to ``limit`` bookings whose reminder is due and not yet sent.
+
+        Open bookings only: a cancelled or closed one gets no reminder. The
+        rows are held until the transaction ends, and ``SKIP LOCKED`` makes a
+        second replica step over them rather than publish them again. The
+        condition is the predicate of ``ix_bookings_reminder_at``, so the scan
+        reads the candidates and nothing else.
+        """
+        statement = (
+            select(BookingRow, MasterSettingsRow.timezone)
+            .outerjoin(MasterSettingsRow, MasterSettingsRow.master_id == BookingRow.master_id)
+            .where(
+                BookingRow.reminder_at <= now,
+                BookingRow.reminder_sent_at.is_(None),
+                BookingRow.status.in_(sorted(OPEN_STATUSES)),
+            )
+            .order_by(BookingRow.reminder_at, BookingRow.id)
+            .limit(limit)
+            .with_for_update(of=BookingRow, skip_locked=True)
+            .execution_options(populate_existing=True)
+        )
+        rows = (await self._session.execute(statement)).all()
+        return [DueReminder(booking=_to_domain(row), timezone=zone) for row, zone in rows]
+
+    async def mark_reminders_sent(self, booking_ids: Sequence[BookingId], *, at: datetime) -> None:
+        """Record that these reminders are dealt with, in the transaction that claimed them."""
+        if not booking_ids:
+            return
+        await self._session.execute(
+            update(BookingRow)
+            .where(BookingRow.id.in_(booking_ids))
+            .values(reminder_sent_at=at)
+            .execution_options(synchronize_session=False)
+        )
 
     async def save_all(self, bookings: Sequence[Booking]) -> None:
         """Write a change of state of many bookings in one statement.

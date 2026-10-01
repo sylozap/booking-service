@@ -26,6 +26,7 @@ from barber_booking.consumers.master_lifecycle import (
 )
 from barber_booking.services.cache import BookingCache
 from barber_booking.settings import ALEMBIC_INI, BookingSettings
+from barber_booking.workers.reminders import ReminderScheduler
 from barber_common.app import create_app, use_database
 from barber_common.auth import jwks_verifier, refreshing, use_authentication
 from barber_common.cache import Cache, cache_from_dsn
@@ -88,6 +89,13 @@ def create_application(settings: BookingSettings | None = None) -> FastAPI:
             handlers=MasterLifecycle().handlers(),
         )
 
+        # Runs on every replica; SKIP LOCKED keeps them from taking one booking twice.
+        reminders = ReminderScheduler(
+            session_factory=database.session_factory,
+            batch_size=resolved.reminder_scheduler_batch_size,
+            interval_seconds=resolved.reminder_scheduler_interval_seconds,
+        )
+
         auth_http = ServiceClient(base_url=resolved.auth_url, upstream="auth")
         catalog_http = ServiceClient(base_url=resolved.catalog_url, upstream="catalog")
         app.state.catalog = CatalogClient(
@@ -118,6 +126,7 @@ def create_application(settings: BookingSettings | None = None) -> FastAPI:
             await stack.enter_async_context(catalog_events.run_in_background())
             stack.push_async_callback(master_events.stop)
             await stack.enter_async_context(master_events.run_in_background())
+            await stack.enter_async_context(reminders.run_in_background())
             yield
 
     return create_app(resolved, routers=[router], lifespan=lifespan, title="Barber Booking")
