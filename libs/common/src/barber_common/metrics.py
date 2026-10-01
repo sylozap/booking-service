@@ -15,7 +15,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from fastapi import FastAPI
-from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram
+from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram, ProcessCollector
 from prometheus_fastapi_instrumentator import Instrumentator
 from prometheus_fastapi_instrumentator.metrics import Info
 
@@ -30,6 +30,11 @@ __all__ = [
 # The registry of the process. Prometheus metrics are process-global by nature:
 # a scrape has to see every counter, whichever module declared it.
 REGISTRY = CollectorRegistry(auto_describe=True)
+
+# Memory, CPU and, above all, process_start_time_seconds: a restart is a change
+# of it. That answers "how often does it restart" the same way under compose
+# and in the cluster, where kube-state-metrics is not always there.
+ProcessCollector(registry=REGISTRY)
 
 METRICS_ENDPOINT = "/metrics"
 

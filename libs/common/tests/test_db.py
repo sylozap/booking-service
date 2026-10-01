@@ -11,6 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from sqlalchemy.pool import QueuePool
 
 from barber_common.db import Database, create_engine, transaction, unit_of_work
+from barber_common.db.engine import observe_pool
+from barber_common.metrics import REGISTRY
 
 pytestmark = pytest.mark.integration
 
@@ -121,3 +123,28 @@ async def test_check_connection_fails_when_the_database_is_unreachable() -> None
         await database.check_connection()
 
     await engine.dispose()
+
+
+def pool_usage(engine: AsyncEngine) -> float | None:
+    return REGISTRY.get_sample_value(
+        "db_pool_usage_ratio", {"database": engine.url.database or "default"}
+    )
+
+
+async def test_pool_usage_counts_the_connections_held(engine: AsyncEngine) -> None:
+    observe_pool(engine, capacity=4)
+
+    async with engine.connect() as connection:
+        await connection.execute(text("SELECT 1"))
+        held = pool_usage(engine)
+
+    assert held == 0.25
+
+
+async def test_pool_usage_falls_back_when_the_connection_returns(engine: AsyncEngine) -> None:
+    observe_pool(engine, capacity=4)
+
+    async with engine.connect() as connection:
+        await connection.execute(text("SELECT 1"))
+
+    assert pool_usage(engine) == 0.0

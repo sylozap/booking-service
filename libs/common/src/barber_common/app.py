@@ -18,6 +18,7 @@ from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontext
 from fastapi import APIRouter, FastAPI
 
 from barber_common.config import BaseAppSettings
+from barber_common.db.engine import observe_pool
 from barber_common.db.session import Database
 from barber_common.errors import document_problem_responses, install_error_handlers
 from barber_common.health import HealthRegistry, create_health_router, database_check
@@ -45,12 +46,18 @@ def use_database(app: FastAPI, database: Database) -> None:
     """Attach a database to the application.
 
     Puts it where the ``get_session`` dependency looks for it, adds it to the
-    readiness probe and gives its statements their own spans.
+    readiness probe, gives its statements their own spans and reports how full
+    its pool is.
     """
     app.state.database = database
     health: HealthRegistry = app.state.health
     health.register("database", database_check(database))
     instrument_engine(database.engine)
+    settings: BaseAppSettings = app.state.settings
+    observe_pool(
+        database.engine,
+        capacity=settings.database_pool_size + settings.database_max_overflow,
+    )
 
 
 def create_app(
