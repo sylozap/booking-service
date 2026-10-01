@@ -26,6 +26,7 @@ from barber_common.http import Timeouts
 from barber_common.testing.fixtures import app_client
 from barber_gateway.main import create_application
 from barber_gateway.proxy import Proxy
+from barber_gateway.rate_limit import SlidingWindowLimiter
 from barber_gateway.routing import Upstream
 from barber_gateway.settings import GatewaySettings
 
@@ -163,6 +164,8 @@ def app(settings: GatewaySettings, proxy: Proxy, signing_key: rsa.RSAPrivateKey)
     """
     application = create_application(settings)
     application.state.proxy = proxy
+    # Admits everything; the suite of the limiter puts a real one in its place.
+    application.state.rate_limiter = SlidingWindowLimiter.disabled()
     public_pem = (
         signing_key.public_key()
         .public_bytes(

@@ -33,3 +33,19 @@ class GatewaySettings(BaseAppSettings):
     proxy_read_timeout_seconds: float = 10.0
     proxy_write_timeout_seconds: float = 10.0
     proxy_pool_timeout_seconds: float = 1.0
+
+    # --- rate limiting -----------------------------------------------------
+    # docs/04-api-contracts.md, "Rate limiting". A strict limit is counted on
+    # top of the general one, not instead of it.
+    rate_limit_anonymous_per_minute: int = 30
+    rate_limit_user_per_minute: int = 120
+    rate_limit_booking_create_per_minute: int = 5
+    rate_limit_registration_per_hour: int = 3
+    # A limiter that has gone slow must not slow every request down with it;
+    # past this deadline the request is let through, as when Redis is down.
+    rate_limit_timeout_seconds: float = 0.2
+    # Proxies in front of the gateway whose X-Forwarded-For entries are
+    # believed: 0 when clients connect directly (the local stack), 1 behind the
+    # Ingress of the cluster. More than there really are lets a client choose
+    # the address it is limited by.
+    trusted_proxy_hops: int = 0
