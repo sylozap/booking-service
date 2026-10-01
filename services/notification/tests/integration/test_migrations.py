@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator
 
 import pytest
 from alembic import command
-from sqlalchemy import inspect
+from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from barber_common.db import create_engine
@@ -96,6 +96,40 @@ async def test_the_address_downgrades_away(dsn: str, migrations_engine: AsyncEng
     await downgrade(dsn, "0003_telegram_link_codes")
 
     assert "address" not in await column_names(migrations_engine, "notifications")
+
+
+async def test_notifications_queued_before_the_topic_get_it_from_their_template(
+    dsn: str, migrations_engine: AsyncEngine
+) -> None:
+    await upgrade(dsn, "0004_notification_address")
+    async with migrations_engine.begin() as connection:
+        for template in ("email_confirmation", "booking_created"):
+            await connection.execute(
+                text(
+                    "INSERT INTO notifications (id, user_id, event_id, channel, template, "
+                    "payload, dedup_key) VALUES (gen_random_uuid(), gen_random_uuid(), "
+                    "gen_random_uuid(), 'email', :template, '{}', gen_random_uuid()::text)"
+                ),
+                {"template": template},
+            )
+
+    await upgrade(dsn)
+
+    async with migrations_engine.connect() as connection:
+        rows = await connection.execute(text("SELECT template, topic FROM notifications"))
+        topics = {row.template: row.topic for row in rows}
+    assert topics == {
+        "email_confirmation": "auth.users.v1",
+        "booking_created": "booking.bookings.v1",
+    }
+
+
+async def test_the_topic_downgrades_away(dsn: str, migrations_engine: AsyncEngine) -> None:
+    await upgrade(dsn)
+
+    await downgrade(dsn, "0004_notification_address")
+
+    assert "topic" not in await column_names(migrations_engine, "notifications")
 
 
 async def test_downgrade_removes_the_notification_tables(

@@ -32,7 +32,8 @@ class Notification(Base):
     ``payload`` holds the fields the template is rendered with, not the text:
     the address and the text are resolved when the message is sent. The one
     exception is ``address``, set when the event names it -- a confirmation
-    letter goes to the address being confirmed.
+    letter goes to the address being confirmed. ``topic`` is where the event
+    came from: a notification given up on goes to the dead letter topic of it.
     ``next_attempt_at`` is when the worker may take the row: now for a new one,
     later for a retry, and the end of the lease for one being sent.
     """
@@ -42,6 +43,7 @@ class Notification(Base):
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     user_id: Mapped[UUID]
     event_id: Mapped[UUID]
+    topic: Mapped[str] = mapped_column(String(255))
     channel: Mapped[str] = mapped_column(String(16))
     template: Mapped[str] = mapped_column(String(64))
     payload: Mapped[dict[str, object]] = mapped_column(JSONB)

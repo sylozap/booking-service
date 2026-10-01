@@ -11,6 +11,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from typing import Protocol
 from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
 
@@ -19,8 +20,9 @@ from aiokafka import ConsumerRecord
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from barber_common.events.bookings import BookingCreated, BookingEventType
+from barber_common.events.bookings import BOOKINGS_TOPIC, BookingCreated, BookingEventType
 from barber_common.events.envelope import build_envelope
+from barber_common.events.users import AUTH_USERS_TOPIC
 from barber_common.kafka import EventConsumer, RetryPolicy
 from barber_notification.consumers.booking_events import (
     BOOKING_EVENTS_GROUP,
@@ -30,7 +32,6 @@ from barber_notification.consumers.booking_events import (
 from barber_notification.models.notification import Notification
 from barber_notification.models.recipient import Recipient
 from barber_notification.providers.base import Channel, DeliveryResult, Message
-from barber_notification.providers.registry import ProviderRegistry
 from barber_notification.repositories.recipients import RecipientRepository
 from barber_notification.services.dispatch import EnqueueNotification
 from barber_notification.workers.delivery import DeliveryWorker
@@ -45,79 +46,20 @@ FIELDS: dict[str, object] = {
 }
 
 
-class RecordingProvider:
-    """Delivers by remembering; answers with whatever the test queued up."""
+class RecordingProvider(Protocol):
+    """The provider of conftest: what it was given, and what it answers next."""
 
-    def __init__(self, name: str = "recording") -> None:
-        self._name = name
-        self.sent: list[tuple[str, Message]] = []
-        self.answers: list[DeliveryResult] = []
-
-    @property
-    def name(self) -> str:
-        return self._name
-
-    async def send(self, address: str, message: Message) -> DeliveryResult:
-        self.sent.append((address, message))
-        return self.answers.pop(0) if self.answers else DeliveryResult.sent()
+    sent: list[tuple[str, Message]]
+    answers: list[DeliveryResult]
 
 
-class Clock:
-    """A clock the test moves by hand.
+class Clock(Protocol):
+    """The clock of conftest, moved by hand."""
 
-    It starts a second ahead: a queued row is due from the database's ``now()``,
-    and the worker comes by a moment after the message was queued, not before.
-    """
-
-    def __init__(self) -> None:
-        self.now = datetime.now(UTC) + timedelta(seconds=1)
-
-    def __call__(self) -> datetime:
-        return self.now
+    now: datetime
 
 
-@pytest.fixture
-def email() -> RecordingProvider:
-    return RecordingProvider("email")
-
-
-@pytest.fixture
-def telegram() -> RecordingProvider:
-    return RecordingProvider("telegram")
-
-
-@pytest.fixture
-def clock() -> Clock:
-    return Clock()
-
-
-def build_worker(
-    session_factory: async_sessionmaker[AsyncSession],
-    email: RecordingProvider,
-    telegram: RecordingProvider,
-    clock: Clock,
-    *,
-    batch_size: int = 20,
-) -> DeliveryWorker:
-    return DeliveryWorker(
-        session_factory=session_factory,
-        providers=ProviderRegistry({Channel.EMAIL: email, Channel.TELEGRAM: telegram}),
-        clock=clock,
-        batch_size=batch_size,
-        lease=timedelta(seconds=60),
-        max_attempts=3,
-        retry_delay=timedelta(seconds=30),
-    )
-
-
-@pytest.fixture
-def worker(
-    session_factory: async_sessionmaker[AsyncSession],
-    email: RecordingProvider,
-    telegram: RecordingProvider,
-    clock: Clock,
-) -> DeliveryWorker:
-    return build_worker(session_factory, email, telegram, clock)
+WorkerFactory = Callable[..., DeliveryWorker]
 
 
 async def queue(
@@ -129,7 +71,11 @@ async def queue(
 ) -> UUID:
     event_id = uuid4()
     await EnqueueNotification(session).execute(
-        event_id=event_id, user_id=user_id, template=template, fields=fields or FIELDS
+        event_id=event_id,
+        topic=BOOKINGS_TOPIC,
+        user_id=user_id,
+        template=template,
+        fields=fields or FIELDS,
     )
     return event_id
 
@@ -323,6 +269,7 @@ async def test_the_confirmation_letter_goes_to_its_address_and_forgets_the_link(
     user_id = uuid4()
     await EnqueueNotification(session).to_address(
         event_id=uuid4(),
+        topic=AUTH_USERS_TOPIC,
         user_id=user_id,
         channel=Channel.EMAIL,
         address="new@example.com",
@@ -342,18 +289,17 @@ async def test_the_confirmation_letter_goes_to_its_address_and_forgets_the_link(
 
 async def test_a_message_whose_worker_died_is_sent_after_the_lease(
     session_factory: async_sessionmaker[AsyncSession],
-    email: RecordingProvider,
-    telegram: RecordingProvider,
+    make_worker: WorkerFactory,
     clock: Clock,
     session: AsyncSession,
     make_recipient: RecipientFactory,
 ) -> None:
     client = await make_recipient()
     await queue(session, client.user_id)
-    dead = build_worker(session_factory, email, telegram, clock)
+    dead = make_worker(session_factory)
     await dead._claim()  # took the row, then the pod died before sending
 
-    survivor = build_worker(session_factory, email, telegram, clock)
+    survivor = make_worker(session_factory)
     assert await survivor.run_once() == 0
 
     clock.now += timedelta(seconds=61)
@@ -364,8 +310,8 @@ async def test_a_message_whose_worker_died_is_sent_after_the_lease(
 
 async def test_two_workers_never_send_the_same_message(
     concurrent_session_factory: async_sessionmaker[AsyncSession],
+    make_worker: WorkerFactory,
     email: RecordingProvider,
-    telegram: RecordingProvider,
     clock: Clock,
 ) -> None:
     async with concurrent_session_factory() as session:
@@ -385,8 +331,8 @@ async def test_two_workers_never_send_the_same_message(
     clock.now = datetime.now(UTC) + timedelta(seconds=1)
 
     # Small batches, so both workers really compete for the same rows.
-    first = build_worker(concurrent_session_factory, email, telegram, clock, batch_size=3)
-    second = build_worker(concurrent_session_factory, email, telegram, clock, batch_size=3)
+    first = make_worker(concurrent_session_factory, batch_size=3)
+    second = make_worker(concurrent_session_factory, batch_size=3)
     for _ in range(4):
         await asyncio.gather(first.run_once(), second.run_once())
 

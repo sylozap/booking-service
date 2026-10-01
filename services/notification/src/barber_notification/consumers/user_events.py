@@ -68,6 +68,7 @@ class UserEvents:
         template, fields = confirmation_message(event, confirmation_url=self._confirmation_url)
         await EnqueueNotification(session).to_address(
             event_id=envelope.event_id,
+            topic=AUTH_USERS_TOPIC,
             user_id=event.user_id,
             channel=Channel.EMAIL,
             address=event.email,

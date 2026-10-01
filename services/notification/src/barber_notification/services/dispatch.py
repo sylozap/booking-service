@@ -71,6 +71,7 @@ class EnqueueNotification:
         self,
         *,
         event_id: UUID,
+        topic: str,
         user_id: UUID,
         template: str,
         fields: dict[str, object],
@@ -93,6 +94,7 @@ class EnqueueNotification:
             channels = reachable_channels(recipient)
             await self._queue(
                 event_id=event_id,
+                topic=topic,
                 user_id=user_id,
                 template=template,
                 fields=fields,
@@ -111,6 +113,7 @@ class EnqueueNotification:
         self,
         *,
         event_id: UUID,
+        topic: str,
         user_id: UUID,
         channel: Channel,
         address: str,
@@ -132,6 +135,7 @@ class EnqueueNotification:
             queued = await self._notifications.add_pending(
                 user_id=user_id,
                 event_id=event_id,
+                topic=topic,
                 channel=channel.value,
                 template=template,
                 payload=fields,
@@ -145,6 +149,7 @@ class EnqueueNotification:
         self,
         *,
         event_id: UUID,
+        topic: str,
         user_id: UUID,
         template: str,
         fields: dict[str, object],
@@ -154,6 +159,7 @@ class EnqueueNotification:
             await self._notifications.add_pending(
                 user_id=user_id,
                 event_id=event_id,
+                topic=topic,
                 channel=channel.value,
                 template=template,
                 payload=fields,

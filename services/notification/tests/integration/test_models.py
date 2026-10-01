@@ -30,6 +30,7 @@ def notification(
     return Notification(
         user_id=uuid4(),
         event_id=event,
+        topic="booking.bookings.v1",
         channel=channel,
         template="booking_created",
         payload={"service_name": "Haircut"},
@@ -89,6 +90,7 @@ async def test_a_new_notification_waits_to_be_sent(session: AsyncSession) -> Non
     row = Notification(
         user_id=uuid4(),
         event_id=uuid4(),
+        topic="booking.bookings.v1",
         channel="email",
         template="booking_created",
         payload={},

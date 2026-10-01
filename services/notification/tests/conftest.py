@@ -32,7 +32,10 @@ from barber_common.testing.fixtures import (
 )
 from barber_notification.main import create_application
 from barber_notification.models.recipient import Recipient
+from barber_notification.providers.base import Channel, DeliveryResult, Message
+from barber_notification.providers.registry import ProviderRegistry
 from barber_notification.settings import ALEMBIC_INI, NotificationSettings
+from barber_notification.workers.delivery import DeliveryWorker
 
 DATABASE_NAME = "notification_test"
 
@@ -57,6 +60,8 @@ WRITTEN_TABLES = (
 RecipientFactory = Callable[..., Awaitable[Recipient]]
 # Builds the Authorization header of a caller, optionally with a given user id.
 AuthorizationFactory = Callable[..., dict[str, str]]
+# Builds a delivery worker over the given sessions and the recording providers.
+WorkerFactory = Callable[..., DeliveryWorker]
 
 
 def build_settings(**overrides: object) -> NotificationSettings:
@@ -264,3 +269,82 @@ async def make_recipient(session: AsyncSession) -> RecipientFactory:
         return recipient
 
     return factory
+
+
+class RecordingProvider:
+    """Delivers by remembering; answers with whatever the test queued up.
+
+    The only stand-in of the delivery tests: it is the edge where Telegram
+    would be. The journal, the leases and the row locks stay real.
+    """
+
+    def __init__(self, name: str = "recording") -> None:
+        self._name = name
+        self.sent: list[tuple[str, Message]] = []
+        self.answers: list[DeliveryResult] = []
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    async def send(self, address: str, message: Message) -> DeliveryResult:
+        self.sent.append((address, message))
+        return self.answers.pop(0) if self.answers else DeliveryResult.sent()
+
+
+class Clock:
+    """A clock the test moves by hand.
+
+    It starts a second ahead: a queued row is due from the database's ``now()``,
+    and the worker comes by a moment after the message was queued, not before.
+    """
+
+    def __init__(self) -> None:
+        self.now = datetime.now(UTC) + timedelta(seconds=1)
+
+    def __call__(self) -> datetime:
+        return self.now
+
+
+@pytest.fixture
+def email() -> RecordingProvider:
+    return RecordingProvider("email")
+
+
+@pytest.fixture
+def telegram() -> RecordingProvider:
+    return RecordingProvider("telegram")
+
+
+@pytest.fixture
+def clock() -> Clock:
+    return Clock()
+
+
+@pytest.fixture
+def make_worker(
+    email: RecordingProvider, telegram: RecordingProvider, clock: Clock
+) -> WorkerFactory:
+    """A delivery worker over the given sessions: three attempts, 30 s apart and doubling."""
+
+    def factory(
+        session_factory: async_sessionmaker[AsyncSession], *, batch_size: int = 20
+    ) -> DeliveryWorker:
+        return DeliveryWorker(
+            session_factory=session_factory,
+            providers=ProviderRegistry({Channel.EMAIL: email, Channel.TELEGRAM: telegram}),
+            clock=clock,
+            batch_size=batch_size,
+            lease=timedelta(seconds=60),
+            max_attempts=3,
+            retry_delay=timedelta(seconds=30),
+        )
+
+    return factory
+
+
+@pytest.fixture
+def worker(
+    session_factory: async_sessionmaker[AsyncSession], make_worker: WorkerFactory
+) -> DeliveryWorker:
+    return make_worker(session_factory)

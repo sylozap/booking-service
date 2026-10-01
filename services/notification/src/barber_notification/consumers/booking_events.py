@@ -71,6 +71,7 @@ async def _notify(
     template, fields = message
     await EnqueueNotification(session).execute(
         event_id=envelope.event_id,
+        topic=BOOKINGS_TOPIC,
         user_id=client_user_id,
         template=template,
         fields=fields,

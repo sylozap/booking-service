@@ -8,13 +8,18 @@ A pass has three steps, and only the middle one talks to the outside world:
 2. with no transaction open, each message is rendered and handed to the
    provider of its channel;
 3. a transaction per notification records the outcome: ``sent``, a retry
-   later, or ``failed``.
+   later, or ``failed`` -- and with ``failed``, a record for the dead letter
+   topic of the event behind it, written to the outbox in that transaction.
 
 A pod that dies between 2 and 3 leaves its rows ``sending``; when the lease
 runs out another pass takes them again. The message may then go out twice --
 the one duplicate at-least-once delivery allows -- but it is never lost. A
 redelivered *event* never makes a second message: the dedup key refused it
 when it was queued.
+
+The record goes through the outbox rather than straight to the broker: a pod
+dying between marking the row ``failed`` and publishing would lose it, and a
+failed row is never taken again.
 """
 
 from __future__ import annotations
@@ -28,7 +33,15 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from barber_common.db.session import unit_of_work
+from barber_common.events.notifications import (
+    NOTIFICATION_AGGREGATE_TYPE,
+    DeliveryFailureReason,
+    NotificationDeliveryFailed,
+    NotificationEventType,
+)
+from barber_common.kafka.dlq import DLQ_MESSAGES, dlq_topic_of
 from barber_common.logging import get_logger
+from barber_common.outbox import OutboxRepository
 from barber_notification.providers.base import Channel, DeliveryOutcome, DeliveryResult
 from barber_notification.providers.registry import ProviderRegistry
 from barber_notification.rendering import SENSITIVE_TEMPLATES, TemplateFieldMissing, render
@@ -182,6 +195,7 @@ class DeliveryWorker:
     async def _record(self, job: _Job, result: DeliveryResult) -> None:
         notification = job.notification
         now = self._clock()
+        given_up: DeliveryFailureReason | None = None
         async with unit_of_work(self._session_factory) as session:
             journal = NotificationRepository(session)
             if result.outcome is DeliveryOutcome.SENT:
@@ -200,12 +214,50 @@ class DeliveryWorker:
                     error=result.detail or "temporary failure",
                 )
             else:
-                await journal.mark_failed(notification.id, error=result.detail or "failed")
+                given_up = _failure_reason(result)
+                error = result.detail or "failed"
+                await journal.mark_failed(notification.id, error=error)
+                await self._dead_letter(
+                    session, notification, reason=given_up, error=error, now=now
+                )
 
             if result.address_gone and notification.channel == Channel.TELEGRAM.value:
                 await self._forget_chat(session, notification, job.address)
 
-        self._log(notification, result)
+        # Counted after the commit: a transaction rolled back wrote no dead letter.
+        if given_up is not None:
+            DLQ_MESSAGES.labels(topic=notification.topic, reason=given_up.value).inc()
+        self._log(notification, result, given_up)
+
+    async def _dead_letter(
+        self,
+        session: AsyncSession,
+        notification: NotificationRecord,
+        *,
+        reason: DeliveryFailureReason,
+        error: str,
+        now: datetime,
+    ) -> None:
+        """Queue the record of a notification given up on, in the caller's transaction."""
+        await OutboxRepository(session).add(
+            topic=dlq_topic_of(notification.topic),
+            aggregate_type=NOTIFICATION_AGGREGATE_TYPE,
+            aggregate_id=notification.id,
+            event_type=NotificationEventType.DELIVERY_FAILED,
+            payload=NotificationDeliveryFailed(
+                notification_id=notification.id,
+                original_event_id=notification.event_id,
+                user_id=notification.user_id,
+                channel=notification.channel,
+                template=notification.template,
+                dlq_reason=reason,
+                dlq_detail=error,
+                dlq_attempts=notification.attempts,
+                dlq_original_topic=notification.topic,
+                dlq_at=now,
+            ),
+            causation_id=notification.event_id,
+        )
 
     async def _forget_chat(
         self, session: AsyncSession, notification: NotificationRecord, address: str | None
@@ -225,7 +277,12 @@ class DeliveryWorker:
             pause = max(pause, timedelta(seconds=result.retry_after_seconds))
         return pause
 
-    def _log(self, notification: NotificationRecord, result: DeliveryResult) -> None:
+    def _log(
+        self,
+        notification: NotificationRecord,
+        result: DeliveryResult,
+        given_up: DeliveryFailureReason | None,
+    ) -> None:
         fields: dict[str, object] = {
             "notification_id": str(notification.id),
             "user_id": str(notification.user_id),
@@ -235,10 +292,25 @@ class DeliveryWorker:
         }
         if result.outcome is DeliveryOutcome.SENT:
             _logger.info("notification sent", **fields)
+        elif given_up is not None:
+            _logger.error(
+                "notification moved to the dead letter topic",
+                dlq_topic=dlq_topic_of(notification.topic),
+                dlq_reason=given_up.value,
+                detail=result.detail,
+                **fields,
+            )
         else:
             _logger.warning(
-                "notification not delivered",
+                "notification not delivered; retrying later",
                 outcome=result.outcome.value,
                 detail=result.detail,
                 **fields,
             )
+
+
+def _failure_reason(result: DeliveryResult) -> DeliveryFailureReason:
+    """A temporary failure given up on ran out of attempts; any other is permanent."""
+    if result.outcome is DeliveryOutcome.TEMPORARY_FAILURE:
+        return DeliveryFailureReason.RETRIES_EXHAUSTED
+    return DeliveryFailureReason.PERMANENT_FAILURE

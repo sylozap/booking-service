@@ -37,6 +37,7 @@ class NotificationRecord:
     id: UUID
     user_id: UUID
     event_id: UUID
+    topic: str
     channel: str
     template: str
     payload: dict[str, object]
@@ -49,6 +50,7 @@ def _to_record(row: Notification) -> NotificationRecord:
         id=row.id,
         user_id=row.user_id,
         event_id=row.event_id,
+        topic=row.topic,
         channel=row.channel,
         template=row.template,
         payload=dict(row.payload),
@@ -73,6 +75,7 @@ class NotificationRepository:
         *,
         user_id: UUID,
         event_id: UUID,
+        topic: str,
         channel: str,
         template: str,
         payload: dict[str, object],
@@ -88,6 +91,7 @@ class NotificationRepository:
             .values(
                 user_id=user_id,
                 event_id=event_id,
+                topic=topic,
                 channel=channel,
                 template=template,
                 payload=payload,

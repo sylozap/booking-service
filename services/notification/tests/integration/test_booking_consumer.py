@@ -205,10 +205,18 @@ async def test_the_dedup_key_holds_even_past_the_processed_events(
     fields: dict[str, object] = {"service_name": "Стрижка", "start_at": "05.09.2026 15:00"}
 
     await enqueue.execute(
-        event_id=event_id, user_id=client.user_id, template="booking_created", fields=fields
+        event_id=event_id,
+        topic=BOOKINGS_TOPIC,
+        user_id=client.user_id,
+        template="booking_created",
+        fields=fields,
     )
     await enqueue.execute(
-        event_id=event_id, user_id=client.user_id, template="booking_created", fields=fields
+        event_id=event_id,
+        topic=BOOKINGS_TOPIC,
+        user_id=client.user_id,
+        template="booking_created",
+        fields=fields,
     )
 
     assert len(await queued_for(session, client.user_id)) == 1
