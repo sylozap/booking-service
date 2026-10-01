@@ -23,16 +23,15 @@ from barber_catalog.repositories.masters import (
     master_cursor,
 )
 from barber_catalog.repositories.salons import SalonRepository
-from barber_catalog.schemas.masters import (
-    MasterCardResponse,
-    MasterCreateRequest,
-    MasterResponse,
-    MasterUpdateRequest,
-    OfferedServiceResponse,
-)
+from barber_catalog.schemas.masters import MasterCreateRequest, MasterUpdateRequest
 from barber_catalog.services.authorization import require_salon_scope
 from barber_catalog.services.cache import CatalogCache
 from barber_common.auth import Principal
+from barber_common.contracts.catalog import (
+    MasterCardResponse,
+    MasterResponse,
+    OfferedServiceResponse,
+)
 from barber_common.db.errors import is_unique_violation
 from barber_common.db.session import transaction
 from barber_common.events.catalog import (

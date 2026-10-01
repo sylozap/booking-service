@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pydantic import Field
+
 from barber_common.config import BaseAppSettings, SecretPostgresDsn
 
 __all__ = ["GatewaySettings"]
@@ -49,3 +51,9 @@ class GatewaySettings(BaseAppSettings):
     # Ingress of the cluster. More than there really are lets a client choose
     # the address it is limited by.
     trusted_proxy_hops: int = 0
+
+    # --- the card of a master ----------------------------------------------
+    # How many days of free starts are read, and how many of the nearest are
+    # shown. The window cannot exceed what availability answers, two weeks.
+    card_slots_window_days: int = Field(default=7, ge=1, le=13)
+    card_slots_limit: int = Field(default=10, ge=1)

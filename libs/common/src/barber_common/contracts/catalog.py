@@ -1,4 +1,4 @@
-"""Contracts of the internal catalog endpoints used by ``booking``.
+"""Contracts of the catalog endpoints other services call.
 
 ``GET /internal/v1/masters/{id}/services/{sid}`` returns in one call whether the
 master is active, the price and duration for this master, a snapshot of the
@@ -9,16 +9,29 @@ the profile, the salon and its time zone. ``booking`` reads it only for a master
 whose ``master.created`` it never received.
 
 The schemas are imported by both ``catalog`` and ``booking``.
+
+``GET /api/v1/masters/{id}`` is public, and the gateway calls it for the card
+of a master; :class:`MasterCardResponse` is what it answers, and catalog builds
+its answer from the same class.
 """
 
 from __future__ import annotations
 
+from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
-__all__ = ["CATALOG_READ_SCOPE", "MasterProfile", "MasterServiceDetails", "SalonPolicies"]
+__all__ = [
+    "CATALOG_READ_SCOPE",
+    "MasterCardResponse",
+    "MasterProfile",
+    "MasterResponse",
+    "MasterServiceDetails",
+    "OfferedServiceResponse",
+    "SalonPolicies",
+]
 
 # The scope a service token has to carry to read the catalog, shared by the
 # endpoint and its callers.
@@ -87,3 +100,48 @@ class MasterProfile(BaseModel):
     is_active: bool
     # The IANA zone of the salon, the one every schedule of it is written in.
     timezone: str
+
+
+class MasterResponse(BaseModel):
+    """A master profile as the API shows it."""
+
+    # Not frozen: catalog builds these, and a reader on the other side ignores
+    # what it does not know, so the services can be deployed in either order.
+    model_config = ConfigDict(extra="ignore")
+
+    id: UUID
+    salon_id: UUID
+    user_id: UUID
+    display_name: str
+    bio: str | None
+    photo_url: str | None
+    specialization: str | None
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class OfferedServiceResponse(BaseModel):
+    """One service on a master's card, at the price that master charges.
+
+    ``price`` and ``duration_min`` are resolved; the salon's base figures are
+    shown alongside.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    service_id: UUID
+    name: str
+    description: str | None
+    price: Decimal
+    currency: str
+    duration_min: int
+
+    base_price: Decimal
+    base_duration_min: int
+
+
+class MasterCardResponse(MasterResponse):
+    """A profile together with everything that master offers."""
+
+    services: list[OfferedServiceResponse]

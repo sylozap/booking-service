@@ -22,8 +22,10 @@ from fastapi import FastAPI
 
 from barber_common.auth import ACCESS_TOKEN_TYPE, StaticKeys, TokenVerifier, use_authentication
 from barber_common.config import Environment
-from barber_common.http import Timeouts
+from barber_common.http import RetryPolicy, ServiceClient, Timeouts
 from barber_common.testing.fixtures import app_client
+from barber_gateway.clients.booking import BookingClient
+from barber_gateway.clients.catalog import CatalogClient
 from barber_gateway.main import create_application
 from barber_gateway.proxy import Proxy
 from barber_gateway.rate_limit import SlidingWindowLimiter
@@ -156,7 +158,12 @@ def bearer(signing_key: rsa.RSAPrivateKey) -> BearerFactory:
 
 
 @pytest.fixture
-def app(settings: GatewaySettings, proxy: Proxy, signing_key: rsa.RSAPrivateKey) -> FastAPI:
+def app(
+    settings: GatewaySettings,
+    proxy: Proxy,
+    services: FakeServices,
+    signing_key: rsa.RSAPrivateKey,
+) -> FastAPI:
     """The real gateway, with the fake services wired in place of the lifespan.
 
     Tokens are real and really verified, against the public half of the key
@@ -166,6 +173,8 @@ def app(settings: GatewaySettings, proxy: Proxy, signing_key: rsa.RSAPrivateKey)
     application.state.proxy = proxy
     # Admits everything; the suite of the limiter puts a real one in its place.
     application.state.rate_limiter = SlidingWindowLimiter.disabled()
+    application.state.catalog = CatalogClient(http=_service_client(Upstream.CATALOG, services))
+    application.state.booking = BookingClient(http=_service_client(Upstream.BOOKING, services))
     public_pem = (
         signing_key.public_key()
         .public_bytes(
@@ -179,6 +188,16 @@ def app(settings: GatewaySettings, proxy: Proxy, signing_key: rsa.RSAPrivateKey)
         TokenVerifier(keys=StaticKeys.from_pem(kid=KID, public_pem=public_pem), issuer=ISSUER),
     )
     return application
+
+
+def _service_client(upstream: Upstream, services: FakeServices) -> ServiceClient:
+    """A client of one fake service, retrying without the pauses."""
+    return ServiceClient(
+        base_url=UPSTREAM_URLS[upstream],
+        upstream=upstream.value,
+        retry=RetryPolicy(initial_delay_seconds=0.0),
+        transport=services.transport(),
+    )
 
 
 @pytest.fixture

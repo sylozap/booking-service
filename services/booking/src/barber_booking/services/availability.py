@@ -22,10 +22,10 @@ from barber_booking.domain.identifiers import MasterId, ServiceId
 from barber_booking.metrics import AVAILABILITY_DURATION, AvailabilitySource
 from barber_booking.repositories.availability import AvailabilityRepository
 from barber_booking.repositories.master_settings import MasterSettingsRepository
-from barber_booking.schemas.availability import AvailabilityResponse, DayAvailability
 from barber_booking.services.cache import BookingCache
 from barber_booking.services.clock import Clock, utc_now
 from barber_booking.services.offerings import ReadOffering
+from barber_common.contracts.booking import AvailabilityResponse, DayAvailability
 from barber_common.contracts.catalog import MasterServiceDetails
 from barber_common.db.session import transaction
 from barber_common.errors import ValidationFailed
