@@ -50,7 +50,9 @@ class DomainError(Exception):
             title = "Slot is already taken"
 
     ``extra`` carries the fields specific to one error, such as the alternative
-    slots offered together with ``slot_taken``.
+    slots offered together with ``slot_taken``. ``headers`` go on the response
+    beside the body, for what HTTP says in a header rather than in a document:
+    ``Retry-After`` of a ``429``.
     """
 
     code: ClassVar[str] = "internal_error"
@@ -62,9 +64,11 @@ class DomainError(Exception):
         detail: str | None = None,
         *,
         extra: Mapping[str, object] | None = None,
+        headers: Mapping[str, str] | None = None,
     ) -> None:
         self.detail = detail if detail is not None else self.title
         self.extra: dict[str, object] = dict(extra or {})
+        self.headers: dict[str, str] = dict(headers or {})
         super().__init__(self.detail)
 
     @property
@@ -149,11 +153,16 @@ def problem_document(
     return document
 
 
-def _problem_response(status: int, document: Mapping[str, object]) -> JSONResponse:
+def _problem_response(
+    status: int,
+    document: Mapping[str, object],
+    headers: Mapping[str, str] | None = None,
+) -> JSONResponse:
     return JSONResponse(
         status_code=status,
         content=dict(document),
         media_type=PROBLEM_CONTENT_TYPE,
+        headers=dict(headers) if headers else None,
     )
 
 
@@ -190,6 +199,7 @@ async def _domain_error_handler(request: Request, exc: Exception) -> Response:
             instance=request.url.path,
             extra=exc.extra,
         ),
+        exc.headers,
     )
 
 

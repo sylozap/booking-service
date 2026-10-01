@@ -61,8 +61,13 @@ def create_app(
     title: str | None = None,
     version: str = "1",
     drain_timeout_seconds: float = DEFAULT_DRAIN_TIMEOUT_SECONDS,
+    openapi_url: str | None = "/openapi.json",
 ) -> FastAPI:
-    """Build the FastAPI application of a service."""
+    """Build the FastAPI application of a service.
+
+    ``openapi_url`` is ``None`` for the gateway, which serves a document of the
+    whole platform in its place rather than one of its own few routes.
+    """
     configure_logging(
         service_name=settings.service_name,
         environment=settings.environment,
@@ -94,6 +99,7 @@ def create_app(
         title=title or settings.service_name,
         version=version,
         lifespan=chassis_lifespan,
+        openapi_url=openapi_url,
     )
     app.state.settings = settings
     app.state.health = health

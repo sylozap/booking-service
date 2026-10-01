@@ -13,6 +13,7 @@ from barber_common.context import bind_context
 from barber_common.errors import (
     PROBLEM_CONTENT_TYPE,
     DomainError,
+    RateLimited,
     install_error_handlers,
 )
 
@@ -42,6 +43,10 @@ def build_app() -> FastAPI:
             "The master is busy from 15:00 to 15:45",
             extra={"alternatives": ["2026-09-05T15:45:00Z"]},
         )
+
+    @app.get("/limited")
+    async def limited() -> None:
+        raise RateLimited("Slow down", headers={"Retry-After": "12"})
 
     @app.get("/boom")
     async def boom() -> None:
@@ -86,6 +91,16 @@ async def test_domain_error_carries_its_own_extra_fields(
     response = await client.get("/taken")
 
     assert response.json()["alternatives"] == ["2026-09-05T15:45:00Z"]
+
+
+async def test_domain_error_carries_its_headers_to_the_response(
+    client: httpx.AsyncClient,
+) -> None:
+    response = await client.get("/limited")
+
+    assert response.status_code == 429
+    assert response.headers["retry-after"] == "12"
+    assert response.json()["code"] == "rate_limited"
 
 
 async def test_correlation_id_of_the_request_reaches_the_response(

@@ -38,6 +38,7 @@ __all__ = [
     "ServiceClient",
     "Timeouts",
     "UpstreamError",
+    "UpstreamTimeout",
 ]
 
 # A retry of anything else creates a duplicate. POST /bookings is protected by
@@ -78,6 +79,20 @@ class UpstreamError(DomainError):
                 "upstream_code": remote_code,
             },
         )
+
+
+class UpstreamTimeout(DomainError):
+    """Another service took the request and did not answer in time.
+
+    Kept apart from :class:`UpstreamUnavailable` because the two mean different
+    things to whoever sent the request. Unavailable: it never arrived, and
+    sending it again is safe. Timed out: it arrived, and it may have done its
+    work -- a booking may exist -- so a blind retry of a write is not safe.
+    """
+
+    code = "upstream_timeout"
+    http_status = 504
+    title = "Upstream service did not answer in time"
 
 
 @dataclass(frozen=True, slots=True)
