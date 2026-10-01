@@ -147,6 +147,10 @@ services:
     environment:
       <<: *service-environment
       SERVICE_NAME: api-gateway
+      AUTH_URL: http://auth:8001
+      CATALOG_URL: http://catalog:8002
+      BOOKING_URL: http://booking:8003
+      NOTIFICATION_URL: http://notification:8004
     ports:
       - "8000:8000"
     volumes:
