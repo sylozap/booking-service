@@ -1,0 +1,67 @@
+# The infrastructure of the platform in a cluster, installed into its own
+# namespace (barber-infra) by scripts/infra_up.sh.
+#
+# Local by design: one replica of everything and no persistent volumes. A pod
+# restarted is a pod emptied -- the databases are created again by the init
+# script, and the topics by scripts/create_topics.sh. What was written is gone;
+# the stand is rebuilt, not repaired.
+
+postgres:
+  # The image of the compose stack.
+  image: postgres:17-alpine
+  # Four services, two replicas each, a pool of 10 + 5 overflow: 120
+  # connections before the migration Jobs and a psql session. The default
+  # 100 is not enough.
+  maxConnections: 200
+  # The superuser and the passwords of the four roles. The values below are
+  # the throwaway ones of the compose stack; a deployment that is not local
+  # names a Secret with the same keys instead:
+  #   POSTGRES_PASSWORD, AUTH_DB_PASSWORD, CATALOG_DB_PASSWORD,
+  #   BOOKING_DB_PASSWORD, NOTIFICATION_DB_PASSWORD
+  existingSecret: ""
+  passwords:
+    postgres: postgres
+    auth: auth
+    catalog: catalog
+    booking: booking
+    notification: notification
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+
+redis:
+  image: redis:7-alpine
+  # A cache and a rate limiter: nothing in it is worth keeping, so it is
+  # never written to disk and evicts the least used key when full.
+  maxMemory: 96mb
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 128Mi
+
+kafka:
+  image: confluentinc/cp-kafka:7.6.0
+  # KRaft needs a cluster id fixed in advance; any 22 character base64 string.
+  clusterId: barber-kind-cluster-01
+  # Three partitions per topic, as in compose: a consumer that only ever sees
+  # one partition hides ordering mistakes.
+  partitions: 3
+  # Topics are created by scripts/create_topics.sh and by nothing else. With
+  # auto creation on, a typo in a topic name creates a topic nobody reads,
+  # instead of an error.
+  autoCreateTopics: false
+  heap: -Xms256m -Xmx512m
+  resources:
+    requests:
+      cpu: 200m
+      memory: 768Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi

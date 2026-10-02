@@ -18,12 +18,13 @@ OBSERVABILITY_DIR := deploy/observability
 # The charts, and the Kubernetes the rendered manifests are validated against:
 # the version of the node image of kind.
 SERVICE_CHART := deploy/helm/service
+INFRA_CHART := deploy/helm/infra
 HELM_VALUES := deploy/helm/values
 HELM_SERVICES := api-gateway auth catalog booking notification
 KUBERNETES_VERSION := 1.37.0
 KUBECONFORM := kubeconform -strict -summary -kubernetes-version $(KUBERNETES_VERSION)
 
-.PHONY: help sync hooks check lint format type test test-unit alerts-check helm-check keys up obs-up obs-down down logs migrate seed kind-up kind-down clean
+.PHONY: help sync hooks check lint format type test test-unit alerts-check helm-check keys up infra-up infra-down infra-check obs-up obs-down down logs migrate seed kind-up kind-down clean
 
 help: ## Show available commands
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -79,6 +80,9 @@ helm-check: ## Lint the Helm charts and validate what they render for every serv
 				| $(KUBECONFORM) - || exit 1; \
 		done; \
 	done
+	@echo "==> infra"
+	@helm lint --strict $(INFRA_CHART) --quiet
+	@helm template infra $(INFRA_CHART) --namespace barber-infra | $(KUBECONFORM) -
 
 keys: $(SIGNING_KEY) ## Generate the local RS256 signing key of auth, if absent
 
@@ -126,6 +130,15 @@ migrate: ## Apply database migrations of every service
 seed: ## Load demo data into the local environment
 	@test -x scripts/seed.sh || { echo "scripts/seed.sh not found"; exit 1; }
 	./scripts/seed.sh
+
+infra-up: ## Install PostgreSQL, Redis and Kafka into the current cluster, create the topics
+	./scripts/infra_up.sh
+
+infra-down: ## Remove the infrastructure from the current cluster, with everything it held
+	helm uninstall infra --namespace barber-infra --ignore-not-found
+
+infra-check: ## Check in the cluster that every role reaches its own database and no other
+	./scripts/check_db_isolation.sh
 
 kind-up: ## Create the kind cluster and install the Helm releases
 	@test -x scripts/kind-up.sh || { echo "scripts/kind-up.sh not found"; exit 1; }
