@@ -1,0 +1,98 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "service.name" . }}
+  labels:
+    {{- include "service.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.hpa.enabled }}
+  # Left to the autoscaler when there is one: a fixed count here would reset
+  # whatever it decided on every upgrade.
+  replicas: {{ .Values.replicas }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "service.selectorLabels" . | nindent 6 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # Capacity never drops below the replica count during a rollout.
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        {{- include "service.labels" . | nindent 8 }}
+      annotations:
+        # A changed ConfigMap rolls the pods: the settings are read once, at
+        # startup, and a pod would otherwise keep the old ones until it dies.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.consumes }}
+        barber.local/consumes: {{ join "," . | quote }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "service.name" . }}
+      automountServiceAccountToken: false
+      # A Service called "kafka" in the namespace would otherwise arrive as
+      # KAFKA_PORT and friends, next to the settings read from the environment.
+      enableServiceLinks: false
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ include "service.name" . }}
+          image: {{ include "service.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.port }}
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "service.name" . }}
+            {{- if .Values.secret.enabled }}
+            - secretRef:
+                name: {{ include "service.secretName" . }}
+            {{- end }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          resources:
+            {{- include "service.resources" (dict "resources" .Values.resources "owner" (include "service.name" .)) | nindent 12 }}
+          volumeMounts:
+            # The root filesystem is read only; whatever a library insists on
+            # writing goes here and dies with the pod.
+            - name: tmp
+              mountPath: /tmp
+            {{- range $index, $file := .Values.secretFiles }}
+            - name: secret-file-{{ $index }}
+              mountPath: {{ $file.mountPath }}
+              subPath: {{ $file.key }}
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+        {{- range $index, $file := .Values.secretFiles }}
+        - name: secret-file-{{ $index }}
+          secret:
+            secretName: {{ $file.secretName }}
+            defaultMode: 0440
+            items:
+              - key: {{ $file.key }}
+                path: {{ $file.key }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

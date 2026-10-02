@@ -1,0 +1,75 @@
+# Defaults of the service chart. A service overrides them in its own file in
+# deploy/helm/values; kind adds deploy/helm/values/local.yaml on top.
+#
+# The release name is the name of the service: "helm install booking" gives a
+# Deployment, a Service and a ConfigMap called booking.
+
+# Overrides the name taken from the release.
+nameOverride: ""
+
+image:
+  # Both are required: an image without a tag is "latest", and "latest" makes
+  # two clusters run different code under one name.
+  repository: ""
+  tag: ""
+  pullPolicy: IfNotPresent
+
+replicas: 2
+
+# The port uvicorn listens on, fixed by the CMD of the image. Probes, the
+# Service and /metrics all go to it.
+port: 8000
+
+# Settings that are not secret, put into the ConfigMap of the release and read
+# by pydantic-settings. SERVICE_NAME is added from the release name.
+env: {}
+
+# The Secret with the variables that are secret -- DATABASE_DSN and the like.
+# Not created by this chart: secrets are generated outside git and only
+# referenced here. Defaults to "<name>-env"; off for a service with no secrets.
+secret:
+  enabled: true
+  name: ""
+
+# Secrets mounted as files rather than variables, such as the signing key of
+# auth. Each entry: secretName, key, mountPath.
+secretFiles: []
+
+# Requests and limits are required, for the application and for the migration
+# Job alike: a pod without limits can eat the memory of a node and take the
+# other pods on it down. Rendering fails when a limit is missing.
+resources: {}
+
+# Topics the consumers of this service read. Documentation only: the consumers
+# run inside the application process, there is no separate Deployment for them.
+consumes: []
+
+podSecurityContext:
+  runAsNonRoot: true
+  # The user the Dockerfile creates.
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: [ALL]
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# Optional resources. Their templates arrive with the tasks that need them.
+migrations:
+  enabled: false
+hpa:
+  enabled: false
+pdb:
+  enabled: false
+serviceMonitor:
+  enabled: false
