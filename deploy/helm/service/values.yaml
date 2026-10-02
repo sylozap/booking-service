@@ -76,6 +76,44 @@ migrations:
       cpu: 500m
       memory: 256Mi
 
+# Timings of the probes. The paths are fixed in the template on purpose:
+# liveness must never look at a dependency, so it is not a setting.
+probes:
+  # The application checks the schema version before it serves anything, and
+  # the first connection to the database can take a while.
+  startup:
+    periodSeconds: 2
+    timeoutSeconds: 2
+    failureThreshold: 30
+  liveness:
+    periodSeconds: 10
+    timeoutSeconds: 2
+    failureThreshold: 3
+  # The readiness check of the database has a deadline of its own of two
+  # seconds (HEALTH_CHECK_TIMEOUT_SECONDS); the timeout here is above it.
+  readiness:
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 2
+
+# The budget of a shutdown, in the order it is spent. The grace period of the
+# pod is their sum, computed by the template, so the parts cannot outgrow it.
+shutdown:
+  # The pod keeps serving while its removal from the endpoints reaches every
+  # node and every client: the endpoints are updated in parallel with
+  # SIGTERM, not before it.
+  preStopSeconds: 5
+  # How long uvicorn waits for the requests in flight after it stops accepting
+  # new ones (UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN). Above the proxy read timeout
+  # of the gateway, so a request it still waits for is not cut first here.
+  requestsSeconds: 15
+  # The lifespan shutdown: consumers finish the message in hand and commit,
+  # the relay and the workers stop, the pools close. Bounded by the time one
+  # message may take, retries included (30 seconds in EventConsumer).
+  backgroundSeconds: 30
+  # Headroom before SIGKILL.
+  marginSeconds: 5
+
 podSecurityContext:
   runAsNonRoot: true
   # The user the Dockerfile creates.

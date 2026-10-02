@@ -148,6 +148,7 @@ class EventConsumer:
         retry_policy: RetryPolicy | None = None,
         message_timeout_seconds: float = 30.0,
         poll_timeout_ms: int = 1000,
+        max_records: int = 100,
         client: AIOKafkaConsumer | None = None,
     ) -> None:
         self._group_id = group_id
@@ -159,6 +160,9 @@ class EventConsumer:
         # a single unreachable dependency must not stop everything behind it.
         self._message_timeout_seconds = message_timeout_seconds
         self._poll_timeout_ms = poll_timeout_ms
+        # How many messages one pass takes. A pass is not interrupted by a
+        # shutdown, a message is; this bounds what is fetched and left behind.
+        self._max_records = max_records
         self._client = client or AIOKafkaConsumer(
             *topics,
             bootstrap_servers=bootstrap_servers,
@@ -204,20 +208,34 @@ class EventConsumer:
         self._is_started = False
         _logger.info("consumer stopped", group_id=self._group_id)
 
-    async def run_once(self) -> int:
+    async def run_once(self, stop: asyncio.Event | None = None) -> int:
         """Read one batch, handle it, commit as it goes. Returns the count.
 
         Joins the group on the first pass rather than at startup, so a broker
         that is down delays consumption instead of stopping the service.
+
+        ``stop`` set while the batch is handled ends the pass after the message
+        in hand is committed. The rest of the batch is left uncommitted and is
+        read again by whoever owns the partition next -- this consumer is about
+        to leave the group, and a shutdown must not wait for a whole batch.
         """
         await self.start()
-        batches = await self._client.getmany(timeout_ms=self._poll_timeout_ms)
+        batches = await self._client.getmany(
+            timeout_ms=self._poll_timeout_ms, max_records=self._max_records
+        )
         handled = 0
         for partition, records in batches.items():
             for record in records:
                 await self.handle(record)
                 await self._commit(partition, record.offset)
                 handled += 1
+                if stop is not None and stop.is_set():
+                    _logger.info(
+                        "consumer stopping mid-batch",
+                        group_id=self._group_id,
+                        handled=handled,
+                    )
+                    return handled
         await self._report_lag()
         return handled
 
@@ -229,7 +247,7 @@ class EventConsumer:
         """
         while not stop.is_set():
             try:
-                await self.run_once()
+                await self.run_once(stop)
             except asyncio.CancelledError:
                 raise
             except Exception:

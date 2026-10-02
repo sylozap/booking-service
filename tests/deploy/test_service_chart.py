@@ -8,6 +8,7 @@ test renders the chart with the values it is about and looks at the result.
 from __future__ import annotations
 
 import importlib
+import inspect
 import re
 import shutil
 import subprocess
@@ -19,6 +20,7 @@ import pytest
 import yaml
 
 from barber_common.config import BaseAppSettings
+from barber_common.kafka.consumer import EventConsumer
 
 ROOT = Path(__file__).resolve().parents[2]
 CHART = ROOT / "deploy/helm/service"
@@ -102,6 +104,15 @@ def container_of(workload: Manifest) -> Manifest:
     return containers[0]
 
 
+def secret_variables(container: Manifest) -> list[Manifest]:
+    """The variables a container takes from a Secret."""
+    return [
+        variable
+        for variable in container.get("env", [])
+        if "secretKeyRef" in variable.get("valueFrom", {})
+    ]
+
+
 # --- what a release consists of ----------------------------------------------
 
 
@@ -158,7 +169,8 @@ def test_container_reads_the_configmap_and_each_key_of_the_secret(render: Render
 
     assert container["envFrom"] == [{"configMapRef": {"name": "booking"}}]
     assert [
-        (variable["name"], variable["valueFrom"]["secretKeyRef"]) for variable in container["env"]
+        (variable["name"], variable["valueFrom"]["secretKeyRef"])
+        for variable in secret_variables(container)
     ] == [
         ("DATABASE_DSN", {"name": "booking-env", "key": "DATABASE_DSN"}),
         ("SERVICE_CLIENT_SECRET", {"name": "booking-env", "key": "SERVICE_CLIENT_SECRET"}),
@@ -171,7 +183,7 @@ def test_service_without_secrets_references_none(render: Render) -> None:
     container = container_of(only(manifests, "Deployment"))
 
     assert container["envFrom"] == [{"configMapRef": {"name": "booking"}}]
-    assert "env" not in container
+    assert secret_variables(container) == []
 
 
 def test_render_fails_when_a_secret_is_enabled_without_keys(render: Render) -> None:
@@ -378,7 +390,7 @@ def test_every_variable_is_a_setting_of_the_service(
 
     configured = set(only(manifests, "ConfigMap")["data"])
     container = container_of(only(manifests, "Deployment"))
-    secret = {variable["name"] for variable in container.get("env", [])}
+    secret = {variable["name"] for variable in secret_variables(container)}
 
     assert configured | secret <= fields
 
@@ -395,7 +407,7 @@ def test_every_required_setting_is_provided(
 
     configured = set(only(manifests, "ConfigMap")["data"])
     container = container_of(only(manifests, "Deployment"))
-    secret = {variable["name"] for variable in container.get("env", [])}
+    secret = {variable["name"] for variable in secret_variables(container)}
 
     assert required <= configured | secret
 
@@ -508,3 +520,67 @@ def test_service_never_routes_to_the_migration_pod(
 def test_render_fails_when_migrations_have_no_secret(render: Render) -> None:
     with pytest.raises(RenderError, match="migrations need DATABASE_DSN"):
         render({"migrations": {"enabled": True}, "secret": {"enabled": False}})
+
+
+# --- probes and the shutdown --------------------------------------------------
+
+
+@pytest.mark.parametrize("service", SERVICES)
+def test_liveness_looks_at_the_process_and_readiness_at_the_dependencies(
+    render_service: Callable[..., list[Manifest]], service: str
+) -> None:
+    container = container_of(only(render_service(service), "Deployment"))
+
+    assert container["startupProbe"]["httpGet"] == {"path": "/health/live", "port": "http"}
+    assert container["livenessProbe"]["httpGet"] == {"path": "/health/live", "port": "http"}
+    assert container["readinessProbe"]["httpGet"] == {"path": "/health/ready", "port": "http"}
+
+
+def test_readiness_waits_longer_than_the_checks_behind_it(render: Render) -> None:
+    container = container_of(only(render(), "Deployment"))
+
+    # The deadline of all readiness checks together, HEALTH_CHECK_TIMEOUT_SECONDS.
+    checks_deadline = BaseAppSettings.model_fields["health_check_timeout_seconds"].default
+
+    assert container["readinessProbe"]["timeoutSeconds"] > checks_deadline
+
+
+@pytest.mark.parametrize("service", SERVICES)
+def test_grace_period_is_the_sum_of_the_shutdown_budget(
+    render_service: Callable[..., list[Manifest]], service: str
+) -> None:
+    deployment = only(render_service(service), "Deployment")
+
+    pod = pod_spec(deployment)
+    container = container_of(deployment)
+    timeout = {variable["name"]: variable.get("value") for variable in container["env"]}
+
+    assert container["lifecycle"]["preStop"] == {"sleep": {"seconds": 5}}
+    assert timeout["UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN"] == "15"
+    assert pod["terminationGracePeriodSeconds"] == 5 + 15 + 30 + 5
+
+
+def test_a_longer_phase_lengthens_the_grace_period(render: Render) -> None:
+    deployment = only(render({"shutdown": {"backgroundSeconds": 60}}), "Deployment")
+
+    assert pod_spec(deployment)["terminationGracePeriodSeconds"] == 5 + 15 + 60 + 5
+
+
+def test_requests_are_given_longer_than_the_gateway_waits_for_an_answer() -> None:
+    gateway = load_settings_default("api-gateway", "proxy_read_timeout_seconds")
+    chart = yaml.safe_load((CHART / "values.yaml").read_text())
+
+    assert chart["shutdown"]["requestsSeconds"] > gateway
+
+
+def test_background_phase_fits_the_time_one_message_may_take() -> None:
+    message_timeout = inspect.signature(EventConsumer).parameters["message_timeout_seconds"].default
+    chart = yaml.safe_load((CHART / "values.yaml").read_text())
+
+    assert chart["shutdown"]["backgroundSeconds"] >= message_timeout
+
+
+def load_settings_default(service: str, field: str) -> float:
+    default = settings_of(service).model_fields[field].default
+    assert isinstance(default, int | float)
+    return float(default)

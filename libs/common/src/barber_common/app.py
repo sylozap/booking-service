@@ -6,12 +6,22 @@ A service is left with its settings and its routers::
     app = create_app(settings, routers=[bookings_router, availability_router])
 
 What it gets in return: correlation id, structured access log, RFC 9457 error
-handlers, probes, metrics, tracing, and a shutdown that takes the pod out of
-the load balancer before it stops answering.
+handlers, probes, metrics, tracing, and an orderly shutdown.
+
+The shutdown, as it happens in a cluster. Kubernetes deletes the pod and, at
+the same moment, starts removing it from the endpoints of the Service; the
+``preStop`` pause of the chart keeps the pod serving while that removal
+reaches every node. Then SIGTERM: uvicorn stops accepting connections and
+waits for the requests in flight (``UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN``), and
+only then runs the lifespan shutdown below -- readiness reports draining,
+the service stops its consumers, relay and workers, the pool is closed. The
+grace period of the pod is the sum of these phases, and the chart computes it
+(``deploy/helm/service/values.yaml``, ``shutdown``).
 """
 
 from __future__ import annotations
 
+import time
 from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
 
@@ -92,15 +102,29 @@ def create_app(
             environment=settings.environment.value,
             version=version,
         )
+        phases: dict[str, float] = {}
         async with AsyncExitStack() as stack:
             if lifespan is not None:
                 await stack.enter_async_context(lifespan(app))
             try:
                 yield
             finally:
+                _logger.info("shutdown started", in_flight=tracker.in_flight)
+                started = time.monotonic()
                 await _drain(health, tracker, drain_timeout_seconds)
+                phases["requests_seconds"] = time.monotonic() - started
+            # Leaving the block stops what the service started, in reverse:
+            # the consumers finish the message in hand and commit.
+            background_started = time.monotonic()
+        phases["background_seconds"] = time.monotonic() - background_started
         await _close_database(app)
-        _logger.info("service stopped")
+        # How long each phase took, against the budget the chart gives the pod:
+        # a shutdown that keeps growing is cut by SIGKILL one day.
+        _logger.info(
+            "service stopped",
+            **{name: round(seconds, 3) for name, seconds in phases.items()},
+            total_seconds=round(time.monotonic() - started, 3),
+        )
 
     app = FastAPI(
         title=title or settings.service_name,
@@ -135,7 +159,14 @@ def create_app(
 
 
 async def _drain(health: HealthRegistry, tracker: RequestTracker, timeout_seconds: float) -> None:
-    """Fail the readiness probe, then wait for the requests in flight."""
+    """Fail the readiness probe, then wait for the requests in flight.
+
+    Under uvicorn the requests have usually finished by now: it waits for them
+    before the lifespan shutdown starts. The wait here covers a server that
+    does not, and the readiness answer covers a shutdown nobody deleted the
+    pod for -- the probe is then the only thing that takes it out of the
+    endpoints.
+    """
     health.start_draining()
     in_flight = tracker.in_flight
     if in_flight:

@@ -404,3 +404,69 @@ async def test_the_correlation_id_of_the_producer_reaches_the_handler(
         await drain(consumer, expected=1)
 
     assert handler.correlation_ids == ["c-8f2a"]
+
+
+class StopOnFirstCall(Handler):
+    """A handler during whose first message the shutdown begins."""
+
+    def __init__(self, stop: asyncio.Event) -> None:
+        super().__init__()
+        self._stop = stop
+
+    async def __call__(self, session: AsyncSession, envelope: JsonEnvelope) -> None:
+        await super().__call__(session, envelope)
+        self._stop.set()
+
+
+async def test_a_shutdown_mid_batch_commits_the_message_in_hand_and_leaves_the_rest(
+    topic: str,
+    group_id: str,
+    kafka_bootstrap: str,
+    session_factory: async_sessionmaker[AsyncSession],
+    dead_letters: DeadLetterPublisher,
+    producer: EventProducer,
+    engine: AsyncEngine,
+) -> None:
+    stop = asyncio.Event()
+    stopping = StopOnFirstCall(stop)
+    consumer, client = build_consumer(
+        topic=topic,
+        group_id=group_id,
+        kafka_bootstrap=kafka_bootstrap,
+        session_factory=session_factory,
+        dead_letters=dead_letters,
+        handler=stopping,
+    )
+    # One aggregate, so one partition and one order: the first message
+    # handled is the first one written.
+    aggregate_id = uuid4()
+    for value in ("one", "two", "three", "four", "five"):
+        await producer.publish(topic=topic, aggregate_id=aggregate_id, envelope=event(value))
+
+    async with consumer:
+        handled = 0
+        async with asyncio.timeout(60):
+            while handled == 0:
+                handled = await consumer.run_once(stop)
+        [partition] = client.assignment()
+        committed = await client.committed(partition)
+
+    assert handled == 1
+    assert stopping.calls == 1
+    assert committed == 1
+
+    # The next owner of the partition picks up exactly where the first left.
+    successor = Handler()
+    next_consumer, _ = build_consumer(
+        topic=topic,
+        group_id=group_id,
+        kafka_bootstrap=kafka_bootstrap,
+        session_factory=session_factory,
+        dead_letters=dead_letters,
+        handler=successor,
+    )
+    async with next_consumer:
+        await drain(next_consumer, expected=4)
+
+    assert successor.calls == 4
+    assert await count_effects(engine) == 5

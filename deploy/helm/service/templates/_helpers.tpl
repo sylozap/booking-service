@@ -61,3 +61,11 @@ missing. Called with a dict: resources, and what to name in the message.
 {{- end -}}
 {{- toYaml .resources -}}
 {{- end -}}
+
+{{/*
+The grace period of the pod: every phase of the shutdown budget, summed.
+*/}}
+{{- define "service.terminationGracePeriodSeconds" -}}
+{{- $s := .Values.shutdown -}}
+{{- add $s.preStopSeconds $s.requestsSeconds $s.backgroundSeconds $s.marginSeconds -}}
+{{- end -}}

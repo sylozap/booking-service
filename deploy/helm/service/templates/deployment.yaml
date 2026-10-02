@@ -35,6 +35,9 @@ spec:
         {{- end }}
     spec:
       serviceAccountName: {{ include "service.name" . }}
+      # Every phase of the shutdown, summed (values: shutdown). Past it the
+      # kubelet sends SIGKILL, and whatever was still running is cut.
+      terminationGracePeriodSeconds: {{ include "service.terminationGracePeriodSeconds" . }}
       automountServiceAccountToken: false
       # A Service called "kafka" in the namespace would otherwise arrive as
       # KAFKA_PORT and friends, next to the settings read from the environment.
@@ -52,10 +55,45 @@ spec:
           envFrom:
             - configMapRef:
                 name: {{ include "service.name" . }}
-          {{- if .Values.secret.enabled }}
           env:
+            # Read by uvicorn itself: how long it waits for the requests in
+            # flight after SIGTERM before the lifespan shutdown starts.
+            - name: UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN
+              value: {{ .Values.shutdown.requestsSeconds | quote }}
+            {{- if .Values.secret.enabled }}
             {{- include "service.secretEnv" (dict "context" . "keys" .Values.secret.keys) | nindent 12 }}
-          {{- end }}
+            {{- end }}
+          # Liveness asks whether the process is alive and nothing else: a
+          # database that is down is a reason to stop sending traffic, never a
+          # reason to restart. Readiness asks the dependencies.
+          startupProbe:
+            httpGet:
+              path: /health/live
+              port: http
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: http
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          lifecycle:
+            # SIGTERM waits for this pause. The pod is already leaving the
+            # endpoints; until every node has heard, requests still arrive,
+            # and they are served instead of refused.
+            preStop:
+              sleep:
+                seconds: {{ .Values.shutdown.preStopSeconds }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
           resources:
