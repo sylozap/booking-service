@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from barber_booking.domain.booking import MASTER_DEACTIVATED, Actor, Booking
 from barber_booking.domain.identifiers import MasterId
+from barber_booking.metrics import count_closed
 from barber_booking.repositories.bookings import BookingRepository
 from barber_booking.repositories.master_settings import MasterSettingsRepository
 from barber_booking.services.clock import Clock, utc_now
@@ -66,6 +67,9 @@ class CancelMasterBookings:
             upcoming = await self._bookings.lock_upcoming(master_id, now=now)
             cancelled = [_cancelled(booking, now) for booking in upcoming]
             await self._bookings.save_all(cancelled)
+            # Counted when the runner commits, not here: a retried handler
+            # would otherwise count the same cancellations again.
+            count_closed(self._session, cancelled)
             await self._outbox.add_batch(
                 topic=BOOKINGS_TOPIC,
                 aggregate_type=BOOKING_AGGREGATE_TYPE,

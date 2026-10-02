@@ -20,6 +20,7 @@ from barber_common.db.migrations import (
 )
 from barber_common.db.session import (
     Database,
+    after_commit,
     create_session_factory,
     get_session,
     transaction,
@@ -35,6 +36,7 @@ __all__ = [
     "Base",
     "Database",
     "SchemaVersionMismatch",
+    "after_commit",
     "check_schema_is_current",
     "constraint_name_of",
     "create_engine",

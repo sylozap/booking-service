@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from barber_booking.domain.booking import Booking
 from barber_booking.domain.booking_status import BookingStatus
 from barber_booking.domain.identifiers import BookingId
+from barber_booking.metrics import count_closed
 from barber_booking.repositories.bookings import BookingRepository
 from barber_booking.repositories.master_settings import MasterSettingsRepository
 from barber_booking.schemas.bookings import BookingResponse
@@ -66,6 +67,7 @@ class CloseVisit:
                 return booking_response(booking)
 
             saved = await self._bookings.save(closed)
+            count_closed(self._session, [saved])
             event_type, payload = _event_of(saved, timezone=master.timezone if master else None)
             await self._outbox.add(
                 topic=BOOKINGS_TOPIC,

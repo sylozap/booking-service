@@ -6,7 +6,18 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import ColumnElement, Select, false, or_, select, true, tuple_, update
+from sqlalchemy import (
+    ColumnElement,
+    Select,
+    extract,
+    false,
+    func,
+    or_,
+    select,
+    true,
+    tuple_,
+    update,
+)
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -203,6 +214,27 @@ class BookingRepository:
             .values(reminder_sent_at=at)
             .execution_options(synchronize_session=False)
         )
+
+    async def booked_seconds_by_salon(
+        self, *, start: datetime, end: datetime
+    ) -> dict[SalonId, float]:
+        """Seconds of open bookings starting in ``[start, end)``, per salon.
+
+        One aggregate over the range: the answer is twenty numbers, however
+        many bookings stand behind them. A salon with nothing booked is absent.
+        """
+        booked = func.sum(extract("epoch", BookingRow.end_at - BookingRow.start_at))
+        statement = (
+            select(BookingRow.salon_id, booked)
+            .where(
+                BookingRow.start_at >= start,
+                BookingRow.start_at < end,
+                BookingRow.status.in_(sorted(OPEN_STATUSES)),
+            )
+            .group_by(BookingRow.salon_id)
+        )
+        rows = (await self._session.execute(statement)).tuples().all()
+        return {SalonId(salon_id): float(seconds) for salon_id, seconds in rows}
 
     async def save_all(self, bookings: Sequence[Booking]) -> None:
         """Write a change of state of many bookings in one statement.
