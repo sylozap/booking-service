@@ -53,6 +53,29 @@ resources: {}
 # run inside the application process, there is no separate Deployment for them.
 consumes: []
 
+# The migration Job, run by a Helm hook before the Deployment is updated
+# (ADR-0015). Same image; the command is "alembic upgrade head". A failed
+# migration fails the upgrade before a single pod is replaced, and the pods of
+# the previous release keep serving.
+migrations:
+  enabled: false
+  # Where alembic.ini of the service lies in the image. Defaults to
+  # /app/services/<name>.
+  workingDir: ""
+  # One retry for a database that blinked; a migration that fails twice is a
+  # broken migration, and repeating it changes nothing.
+  backoffLimit: 1
+  # A migration still running after this has hung on a lock, and the release
+  # is better stopped than waiting forever.
+  activeDeadlineSeconds: 300
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
 podSecurityContext:
   runAsNonRoot: true
   # The user the Dockerfile creates.
@@ -74,8 +97,6 @@ tolerations: []
 affinity: {}
 
 # Optional resources. Their templates arrive with the tasks that need them.
-migrations:
-  enabled: false
 hpa:
   enabled: false
 pdb:

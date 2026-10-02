@@ -421,3 +421,90 @@ def test_local_runs_one_replica_of_the_image_built_for_compose(
     assert container["image"] == f"barber/{service}:local"
     assert container["imagePullPolicy"] == "Never"
     assert container["resources"]["limits"] == {"cpu": "500m", "memory": "384Mi"}
+
+
+# --- the migration Job --------------------------------------------------------
+
+SERVICES_WITH_SCHEMA = ("auth", "catalog", "booking", "notification")
+
+
+def job_of(manifests: list[Manifest]) -> Manifest:
+    return only(manifests, "Job")
+
+
+@pytest.mark.parametrize("service", SERVICES)
+def test_only_a_service_with_a_schema_has_a_migration_job(
+    render_service: Callable[..., list[Manifest]], service: str
+) -> None:
+    jobs = find(render_service(service), "Job")
+
+    has_schema = (ROOT / f"services/{service}/alembic.ini").exists()
+
+    assert has_schema == (service in SERVICES_WITH_SCHEMA)
+    assert len(jobs) == (1 if has_schema else 0)
+
+
+@pytest.mark.parametrize("service", SERVICES_WITH_SCHEMA)
+def test_migration_runs_before_the_release_and_survives_a_failure(
+    render_service: Callable[..., list[Manifest]], service: str
+) -> None:
+    job = job_of(render_service(service))
+
+    annotations = job["metadata"]["annotations"]
+
+    assert annotations["helm.sh/hook"] == "pre-install,pre-upgrade"
+    assert annotations["helm.sh/hook-weight"] == "-5"
+    assert annotations["helm.sh/hook-delete-policy"] == "before-hook-creation"
+    assert pod_spec(job)["restartPolicy"] == "Never"
+    assert job["spec"]["activeDeadlineSeconds"] > 0
+
+
+@pytest.mark.parametrize("service", SERVICES_WITH_SCHEMA)
+def test_migration_runs_alembic_of_the_service_in_the_same_image(
+    render_service: Callable[..., list[Manifest]], service: str
+) -> None:
+    manifests = render_service(service)
+
+    migrate = container_of(job_of(manifests))
+    application = container_of(only(manifests, "Deployment"))
+
+    assert migrate["command"] == ["alembic", "upgrade", "head"]
+    assert migrate["workingDir"] == f"/app/services/{service}"
+    assert migrate["image"] == application["image"]
+    assert migrate["resources"]["limits"].keys() >= {"cpu", "memory"}
+
+
+@pytest.mark.parametrize("service", SERVICES_WITH_SCHEMA)
+def test_migration_leans_on_nothing_the_release_creates(
+    render_service: Callable[..., list[Manifest]], service: str
+) -> None:
+    job = job_of(render_service(service))
+
+    pod = pod_spec(job)
+    migrate = container_of(job)
+
+    assert "serviceAccountName" not in pod
+    assert "envFrom" not in migrate
+    assert migrate["env"] == [
+        {
+            "name": "DATABASE_DSN",
+            "valueFrom": {"secretKeyRef": {"name": f"{service}-env", "key": "DATABASE_DSN"}},
+        }
+    ]
+
+
+@pytest.mark.parametrize("service", SERVICES_WITH_SCHEMA)
+def test_service_never_routes_to_the_migration_pod(
+    render_service: Callable[..., list[Manifest]], service: str
+) -> None:
+    manifests = render_service(service)
+
+    selector = only(manifests, "Service")["spec"]["selector"]
+    labels = job_of(manifests)["spec"]["template"]["metadata"]["labels"]
+
+    assert not selector.items() <= labels.items()
+
+
+def test_render_fails_when_migrations_have_no_secret(render: Render) -> None:
+    with pytest.raises(RenderError, match="migrations need DATABASE_DSN"):
+        render({"migrations": {"enabled": True}, "secret": {"enabled": False}})

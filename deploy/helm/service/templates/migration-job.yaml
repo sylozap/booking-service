@@ -1,0 +1,68 @@
+{{- if .Values.migrations.enabled }}
+{{- $name := include "service.name" . -}}
+{{- if not .Values.secret.enabled }}
+{{- fail (printf "%s: migrations need DATABASE_DSN from the Secret, and secret.enabled is false" $name) }}
+{{- end }}
+# ADR-0015: the schema is migrated exactly once per release, by this Job,
+# before the Deployment changes. Not an init container: three replicas would
+# run three "alembic upgrade" at once.
+#
+# A hook runs before the resources of the release exist on the first install,
+# so the Job leans on nothing of it -- not its ConfigMap, not its
+# ServiceAccount. The DSN comes from the Secret, which lives outside the
+# release.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}-migrate
+  labels:
+    {{- include "service.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migrations
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    # The Job of the previous run is deleted when the next one is created, not
+    # when it succeeds: a failed migration stays, with its logs, until then.
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: {{ .Values.migrations.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.migrations.activeDeadlineSeconds }}
+  template:
+    metadata:
+      # Labels of their own: with the selector labels of the Deployment, the
+      # Service would send requests to a pod that runs alembic.
+      labels:
+        app.kubernetes.io/name: {{ $name }}-migrate
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: migrations
+        app.kubernetes.io/part-of: barber
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: migrate
+          image: {{ include "service.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          workingDir: {{ default (printf "/app/services/%s" $name) .Values.migrations.workingDir }}
+          command: ["alembic", "upgrade", "head"]
+          env:
+            - name: DATABASE_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "service.secretName" . }}
+                  key: DATABASE_DSN
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          resources:
+            {{- include "service.resources" (dict "resources" .Values.migrations.resources "owner" (printf "%s migrations" $name)) | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+{{- end }}
