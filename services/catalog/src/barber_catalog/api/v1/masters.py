@@ -20,14 +20,10 @@ from barber_catalog.api.v1.dependencies import (
     UpdateMasterScenario,
 )
 from barber_catalog.domain.identifiers import MasterId, SalonId
-from barber_catalog.schemas.masters import (
-    MasterCardResponse,
-    MasterCreateRequest,
-    MasterResponse,
-    MasterUpdateRequest,
-)
+from barber_catalog.schemas.masters import MasterCreateRequest, MasterUpdateRequest
 from barber_catalog.services.authorization import SALON_ADMINISTRATORS
 from barber_common.auth import Principal, require_roles
+from barber_common.contracts.catalog import MasterCardResponse, MasterResponse
 from barber_common.pagination import Page, Pagination
 
 __all__ = ["router", "salon_masters_router"]

@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from barber_booking.domain.booking import Booking
 from barber_booking.domain.booking_status import BookingStatus
 from barber_booking.domain.identifiers import BookingId
+from barber_booking.metrics import count_closed
 from barber_booking.repositories.bookings import BookingRepository
 from barber_booking.repositories.master_settings import MasterSettingsRepository
 from barber_booking.schemas.bookings import BookingCancelRequest, BookingResponse
@@ -76,6 +77,7 @@ class CancelBooking:
                 return booking_response(booking)
 
             saved = await self._bookings.save(cancelled)
+            count_closed(self._session, [saved])
             # Only for the message the client gets: the time in their salon.
             master = await self._masters.get(saved.master_id)
             await self._outbox.add(

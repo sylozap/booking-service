@@ -84,6 +84,16 @@ jobs:
       - name: pytest
         run: uv run pytest --cov=libs/common/src --cov=services --cov-report=term-missing
 
+  alerts:
+    # The alerting rules, their unit tests and the routing, checked by the
+    # promtool and amtool of the images the stack runs. Nothing to install:
+    # the runner has Docker.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - run: make alerts-check
+
   changes:
     # Which services a change touched, so the build below is not five images
     # every time somebody edits a docstring.

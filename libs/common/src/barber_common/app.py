@@ -18,8 +18,9 @@ from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontext
 from fastapi import APIRouter, FastAPI
 
 from barber_common.config import BaseAppSettings
+from barber_common.db.engine import observe_pool
 from barber_common.db.session import Database
-from barber_common.errors import install_error_handlers
+from barber_common.errors import document_problem_responses, install_error_handlers
 from barber_common.health import HealthRegistry, create_health_router, database_check
 from barber_common.logging import configure_logging, get_logger
 from barber_common.metrics import instrument_app
@@ -45,12 +46,18 @@ def use_database(app: FastAPI, database: Database) -> None:
     """Attach a database to the application.
 
     Puts it where the ``get_session`` dependency looks for it, adds it to the
-    readiness probe and gives its statements their own spans.
+    readiness probe, gives its statements their own spans and reports how full
+    its pool is.
     """
     app.state.database = database
     health: HealthRegistry = app.state.health
     health.register("database", database_check(database))
     instrument_engine(database.engine)
+    settings: BaseAppSettings = app.state.settings
+    observe_pool(
+        database.engine,
+        capacity=settings.database_pool_size + settings.database_max_overflow,
+    )
 
 
 def create_app(
@@ -61,8 +68,13 @@ def create_app(
     title: str | None = None,
     version: str = "1",
     drain_timeout_seconds: float = DEFAULT_DRAIN_TIMEOUT_SECONDS,
+    openapi_url: str | None = "/openapi.json",
 ) -> FastAPI:
-    """Build the FastAPI application of a service."""
+    """Build the FastAPI application of a service.
+
+    ``openapi_url`` is ``None`` for the gateway, which serves a document of the
+    whole platform in its place rather than one of its own few routes.
+    """
     configure_logging(
         service_name=settings.service_name,
         environment=settings.environment,
@@ -94,12 +106,14 @@ def create_app(
         title=title or settings.service_name,
         version=version,
         lifespan=chassis_lifespan,
+        openapi_url=openapi_url,
     )
     app.state.settings = settings
     app.state.health = health
     app.state.requests = tracker
 
     install_error_handlers(app)
+    document_problem_responses(app)
     app.include_router(
         create_health_router(health, timeout_seconds=settings.health_check_timeout_seconds)
     )

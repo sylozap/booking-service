@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from uuid import UUID, uuid4
 
@@ -13,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from barber_common.db import unit_of_work
 from barber_common.events.envelope import EventEnvelope
 from barber_common.kafka.producer import EventProducer
+from barber_common.metrics import REGISTRY
 from barber_common.outbox.models import OutboxMessage
 from barber_common.outbox.relay import OutboxRelay
 from barber_common.outbox.repository import OutboxRepository
@@ -76,6 +78,7 @@ class RecordingProducer(EventProducer):
         topic: str,
         aggregate_id: UUID | str,
         envelope: EventEnvelope[PayloadT],
+        traceparent: str | None = None,
     ) -> None:
         self.published.append(
             PublishedEvent(
@@ -221,6 +224,96 @@ async def test_pending_events_survive_a_broker_outage(
 
     assert await working.run_once() == 3
     assert await count_rows(engine, published=False) == 0
+
+
+class HangingProducer(RecordingProducer):
+    """A broker that went away mid-send: the client waits with no deadline."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.release = asyncio.Event()
+
+    async def publish[PayloadT](
+        self,
+        *,
+        topic: str,
+        aggregate_id: UUID | str,
+        envelope: EventEnvelope[PayloadT],
+        traceparent: str | None = None,
+    ) -> None:
+        await self.release.wait()
+        raise PublishFailed
+
+
+async def gauge_reaches(name: str, value: float, *, timeout_seconds: float = 10.0) -> None:
+    # Polled: the gauge is set by a loop of the relay, which announces nothing.
+    async with asyncio.timeout(timeout_seconds):
+        while True:
+            if REGISTRY.get_sample_value(name) == value:
+                return
+            await asyncio.sleep(0.02)
+
+
+async def test_the_gauges_follow_the_outbox_while_a_pass_hangs(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # The last good measurement saw an empty outbox: what a stale gauge keeps.
+    await OutboxRelay(session_factory=session_factory, producer=RecordingProducer()).measure_once()
+    assert REGISTRY.get_sample_value("outbox_pending_messages") == 0
+    for _ in range(3):
+        await add_event(session_factory, booking_event())
+    producer = HangingProducer()
+    relay = OutboxRelay(
+        session_factory=session_factory,
+        producer=producer,
+        measure_interval_seconds=0.05,
+        publish_timeout_seconds=60,
+    )
+
+    async with relay.run_in_background():
+        # The pass holds the three rows locked and never returns.
+        await gauge_reaches("outbox_pending_messages", 3)
+        lag = REGISTRY.get_sample_value("outbox_publish_lag_seconds")
+        producer.release.set()
+
+    assert lag is not None
+    assert lag > 0
+
+
+async def test_a_send_that_never_returns_is_given_up_after_the_deadline(
+    engine: AsyncEngine, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    await add_event(session_factory, booking_event())
+    relay = OutboxRelay(
+        session_factory=session_factory,
+        producer=HangingProducer(),
+        publish_timeout_seconds=0.1,
+    )
+
+    with pytest.raises(TimeoutError):
+        await relay.run_once()
+
+    # Rolled back: the row is there for the next pass, and no longer locked.
+    assert await count_rows(engine, published=False) == 1
+    working = OutboxRelay(session_factory=session_factory, producer=RecordingProducer())
+    assert await working.run_once() == 1
+
+
+async def test_a_relay_stuck_in_a_send_still_stops(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    await add_event(session_factory, booking_event())
+    relay = OutboxRelay(
+        session_factory=session_factory,
+        producer=HangingProducer(),
+        idle_interval_seconds=0.01,
+        publish_timeout_seconds=0.1,
+    )
+
+    # The shutdown of the service waits for this block to end.
+    async with asyncio.timeout(5):
+        async with relay.run_in_background():
+            await asyncio.sleep(0.05)
 
 
 async def test_a_batch_queues_one_event_per_aggregate_with_one_cause(

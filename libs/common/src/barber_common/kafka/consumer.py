@@ -5,7 +5,8 @@ message replayed after a crash is dropped by ``processed_events``.
 
 What the runner does around a handler:
 
-* restores ``correlation_id`` and the trace context from the message headers;
+* restores ``correlation_id`` and the trace context from the message headers,
+  continuing the trace the event was written in;
 * routes by ``event_type``, logging and committing unknown types;
 * opens one transaction, claims the event for the consumer group, calls the
   handler, commits;
@@ -13,7 +14,8 @@ What the runner does around a handler:
   handlers there after the retries.
 
 A handler works in the session of that transaction and neither commits nor
-talks to the broker.
+talks to the broker. An event it writes to the outbox takes the handled event
+as its ``causation_id`` and stays in the same trace.
 """
 
 from __future__ import annotations
@@ -34,11 +36,11 @@ from opentelemetry import trace
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from barber_common.context import bind_context
+from barber_common.context import bind_causation, bind_context
 from barber_common.db.session import unit_of_work
 from barber_common.events.envelope import JsonEnvelope
 from barber_common.kafka.dedup import ProcessedEventRepository
-from barber_common.kafka.dlq import DeadLetter, DeadLetterPublisher
+from barber_common.kafka.dlq import DeadLetter, DeadLetterPublisher, start_dead_letter_counts
 from barber_common.logging import get_logger
 from barber_common.metrics import counter, gauge
 from barber_common.tracing import extract_trace_context
@@ -55,12 +57,20 @@ __all__ = [
 EventHandler = Callable[[AsyncSession, JsonEnvelope], Awaitable[None]]
 
 _logger = get_logger(__name__)
-_tracer = trace.get_tracer(__name__)
 
 EVENTS_PROCESSED = counter(
     "events_processed_total",
     "Events taken off a topic, by what happened to them",
     labelnames=("topic", "event_type", "result"),
+)
+
+# A retry is a handler that failed and is about to run again: the attempts
+# before the last. Retries growing while the DLQ stays quiet is a dependency
+# that fails now and then -- the warning before messages start to be lost.
+EVENT_RETRIES = counter(
+    "event_retries_total",
+    "Handler attempts repeated after a failure",
+    labelnames=("topic", "event_type"),
 )
 
 # Consumer lag per partition; the number of partitions per topic is fixed, so
@@ -159,6 +169,7 @@ class EventConsumer:
             auto_offset_reset="earliest",
         )
         self._is_started = False
+        start_dead_letter_counts(topics)
 
     def register(self, event_type: str, handler: EventHandler) -> None:
         """Bind a handler to an event type. A second binding is a mistake."""
@@ -255,17 +266,25 @@ class EventConsumer:
         carrier = {name: value.decode("utf-8", errors="replace") for name, value in headers.items()}
         correlation_id = carrier.get("correlation_id")
 
+        # A child of the context in the headers, not a new trace: the producer
+        # put there the context the event was written in.
+        attributes: dict[str, str | int] = {
+            "messaging.system": "kafka",
+            "messaging.operation.type": "process",
+            "messaging.source.name": record.topic,
+            "messaging.consumer.group.name": self._group_id,
+            "messaging.destination.partition.id": str(record.partition),
+            "messaging.kafka.offset": record.offset,
+        }
+        if "event_id" in carrier:
+            attributes["messaging.message.id"] = carrier["event_id"]
         with (
             bind_context(correlation_id=correlation_id),
-            _tracer.start_as_current_span(
+            trace.get_tracer(__name__).start_as_current_span(
                 f"consume {record.topic}",
                 context=extract_trace_context(carrier),
                 kind=trace.SpanKind.CONSUMER,
-                attributes={
-                    "messaging.system": "kafka",
-                    "messaging.source.name": record.topic,
-                    "messaging.kafka.consumer.group": self._group_id,
-                },
+                attributes=attributes,
             ),
         ):
             return await self._dispatch(record)
@@ -323,6 +342,9 @@ class EventConsumer:
                             error=type(error).__name__,
                         )
                         if attempt < self._retry_policy.attempts:
+                            EVENT_RETRIES.labels(
+                                topic=record.topic, event_type=envelope.event_type
+                            ).inc()
                             await asyncio.sleep(self._retry_policy.delay_for(attempt))
         except TimeoutError as error:
             last_error = error
@@ -359,7 +381,8 @@ class EventConsumer:
                 self._count(topic, envelope.event_type, ProcessingResult.DUPLICATE)
                 return ProcessingResult.DUPLICATE
 
-            await handler(session, envelope)
+            with bind_causation(envelope.event_id):
+                await handler(session, envelope)
 
         _logger.info(
             "event processed",

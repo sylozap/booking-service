@@ -1,0 +1,161 @@
+# Alerting rules of the platform, the table of docs/11-observability.md.
+#
+# Every alert carries three annotations, and an alert without them does not
+# pass the contract test (tests/contract/test_observability.py):
+#
+#   summary      what is wrong, in one line;
+#   description  what to do about it -- an alert without an action is noise;
+#   dashboard    where to look first.
+#
+# The dashboard links point at the local Grafana. In the cluster these rules
+# become a PrometheusRule and the base address changes with them.
+#
+# severity: critical is an event the platform accepted and is not acting on,
+# or a service that is gone; warning is a degradation nobody loses data over
+# yet. Tested by rules.test.yaml with "make alerts-check".
+
+groups:
+  - name: barber-services
+    rules:
+      - alert: ServiceDown
+        expr: up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.service }} does not answer the scrape"
+          description: >-
+            Prometheus has not reached /metrics of {{ $labels.service }} for a
+            minute. Check whether the container runs and why it stopped:
+            "docker compose ps", then the logs of {{ $labels.service }} in Loki.
+            A restart loop shows as restarts on the overview dashboard. The
+            other alerts of this service are held back while it is down.
+          dashboard: http://localhost:3000/d/barber-overview
+
+      - alert: HighErrorRate
+        expr: >-
+          sum by (service) (rate(http_requests_total{status=~"5.."}[5m]))
+          / sum by (service) (rate(http_requests_total[5m]))
+          > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.service }} answers {{ $value | humanizePercentage }} of requests with 5xx"
+          description: >-
+            More than 5 % of the requests of {{ $labels.service }} end in a
+            server error. Find the route on the overview dashboard, then a
+            failing request in Tempo; its logs open from the span. A 502 or
+            504 in the gateway is the service behind it.
+          dashboard: http://localhost:3000/d/barber-overview
+
+      - alert: SlowAvailability
+        expr: >-
+          histogram_quantile(0.95,
+            sum by (le) (rate(availability_query_duration_seconds_bucket[5m])))
+          > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "p95 of availability is {{ $value | humanizeDuration }}"
+          description: >-
+            The availability query breaks its SLO of 1 s for ten minutes. Split
+            the histogram by source: slow from the database is the query or
+            the pool (database pool panel); slow from the cache is Redis. A
+            cache that stopped hitting sends everything to the database.
+          dashboard: http://localhost:3000/d/barber-overview
+
+  - name: barber-async
+    rules:
+      - alert: ConsumerLag
+        expr: sum by (group) (max by (group, topic, partition) (kafka_consumer_lag)) > 1000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Consumer group {{ $labels.group }} is {{ $value }} messages behind"
+          description: >-
+            The group handles slower than its topics fill. Look at retries
+            and handling results on the async dashboard: retries mean a slow
+            or failing dependency of the handler, a flat lag that never moves
+            means a consumer that stopped polling -- restart the service.
+          dashboard: http://localhost:3000/d/barber-async
+
+      # Not "pending > 0": under steady traffic a scrape nearly always finds
+      # something just written. The age of the oldest event is what a working
+      # relay keeps under a second.
+      - alert: OutboxNotDraining
+        expr: max by (service) (outbox_publish_lag_seconds) > 30
+        for: 4m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The outbox of {{ $labels.service }} has not drained for minutes"
+          description: >-
+            The oldest unpublished event of {{ $labels.service }} is older than
+            30 s. The relay cannot publish: check Kafka first, then the
+            "outbox relay pass failed" records of the service in Loki. Events
+            are kept and go out once the cause is fixed; nothing is lost.
+          dashboard: http://localhost:3000/d/barber-async
+
+      - alert: DeadLetters
+        expr: sum by (service, topic, reason) (increase(dlq_messages_total[5m])) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "A message of {{ $labels.topic }} went to the DLQ ({{ $labels.reason }})"
+          description: >-
+            An event was accepted and not acted on. Read it from
+            {{ $labels.topic }}.dlq: the headers hold the reason, the attempts
+            and the traceback. invalid_message is a defect of the producer;
+            handler_failed is a handler that failed every attempt -- fix the
+            cause and replay the message.
+          dashboard: http://localhost:3000/d/barber-async
+
+      - alert: NotificationDeliveryStalled
+        expr: max(notifications_oldest_due_age_seconds) > 300
+        labels:
+          severity: critical
+        annotations:
+          summary: "A notification due for sending has waited {{ $value | humanizeDuration }}"
+          description: >-
+            The delivery worker of notification does not send. Check that the
+            service runs, then the "delivery pass failed" records in Loki and
+            the send time of the channels on the business dashboard: a
+            provider that hangs holds the worker.
+          dashboard: http://localhost:3000/d/barber-async
+
+      # Measured from the start of the process as well: until its first pass a
+      # fresh process reports zero, which is not fifty years of silence.
+      - alert: ReminderSchedulerSilent
+        expr: >-
+          (time() - max by (service) (reminder_scheduler_last_run_timestamp) > 300)
+          and on (service)
+          (time() - max by (service) (process_start_time_seconds) > 300)
+        labels:
+          severity: critical
+        annotations:
+          summary: "The reminder scheduler has not completed a pass for five minutes"
+          description: >-
+            Clients stop getting reminders. The scheduler runs inside booking:
+            look for "reminder scheduler pass failed" in its logs in Loki; a
+            database that refuses connections is the usual cause. Reminders
+            missed meanwhile go out on the first pass after, unless the visit
+            has begun.
+          dashboard: http://localhost:3000/d/barber-async
+
+      - alert: AuthCleanupSilent
+        expr: >-
+          (time() - max by (service) (auth_cleanup_last_success_timestamp) > 3 * 3600)
+          and on (service)
+          (time() - max by (service) (process_start_time_seconds) > 3 * 3600)
+        labels:
+          severity: warning
+        annotations:
+          summary: "The cleanup of auth has not completed a pass for three hours"
+          description: >-
+            The tables of tokens grow and nothing is lost yet. Look for
+            "cleanup pass failed" in the logs of auth in Loki. Expired rows are
+            removed by the first pass that succeeds.
+          dashboard: http://localhost:3000/d/barber-async

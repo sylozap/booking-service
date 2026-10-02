@@ -8,15 +8,18 @@ make that impossible.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from contextlib import AbstractContextManager
 from datetime import UTC, datetime
-from uuid import UUID
+from uuid import UUID, uuid4
 
+from opentelemetry import trace
 from pydantic import BaseModel
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from barber_common.context import get_correlation_id
+from barber_common.context import get_causation_id, get_correlation_id
 from barber_common.outbox.models import OutboxMessage
+from barber_common.tracing import current_traceparent
 
 __all__ = ["OutboxRepository"]
 
@@ -43,17 +46,24 @@ class OutboxRepository:
         The payload arrives as a pydantic model and is stored as JSON: the
         schema is checked here, at the only place that knows it, and not when
         a consumer three services away fails to parse it.
+
+        ``causation_id`` defaults to the event being handled, when this runs
+        in a consumer.
         """
-        message = OutboxMessage(
-            topic=topic,
-            aggregate_type=aggregate_type,
-            aggregate_id=aggregate_id,
-            event_type=event_type,
-            event_version=event_version,
-            payload=payload.model_dump(mode="json"),
-            correlation_id=get_correlation_id(),
-            causation_id=causation_id,
-        )
+        event_id = uuid4()
+        with _create_span(topic, event_type, count=1, event_id=event_id):
+            message = OutboxMessage(
+                id=event_id,
+                topic=topic,
+                aggregate_type=aggregate_type,
+                aggregate_id=aggregate_id,
+                event_type=event_type,
+                event_version=event_version,
+                payload=payload.model_dump(mode="json"),
+                correlation_id=get_correlation_id(),
+                causation_id=causation_id or get_causation_id(),
+                traceparent=current_traceparent(),
+            )
         self._session.add(message)
         await self._session.flush()
         return message
@@ -75,6 +85,9 @@ class OutboxRepository:
         ``events`` pairs the id of each aggregate with its payload.
         """
         correlation_id = get_correlation_id()
+        # One span for the batch: the events share their cause and their trace.
+        with _create_span(topic, event_type, count=len(events)):
+            traceparent = current_traceparent()
         messages = [
             OutboxMessage(
                 topic=topic,
@@ -84,7 +97,8 @@ class OutboxRepository:
                 event_version=event_version,
                 payload=payload.model_dump(mode="json"),
                 correlation_id=correlation_id,
-                causation_id=causation_id,
+                causation_id=causation_id or get_causation_id(),
+                traceparent=traceparent,
             )
             for aggregate_id, payload in events
         ]
@@ -141,3 +155,25 @@ class OutboxRepository:
         if oldest is None:
             return 0.0
         return max(0.0, (datetime.now(UTC) - oldest).total_seconds())
+
+
+def _create_span(
+    topic: str, event_type: str, *, count: int, event_id: UUID | None = None
+) -> AbstractContextManager[trace.Span]:
+    """The point in the trace where an event came to be.
+
+    Its context is what the row stores and the consumer continues: the event
+    is created here, in the transaction of the change, and only sent later.
+    """
+    attributes: dict[str, str | int] = {
+        "messaging.system": "kafka",
+        "messaging.operation.type": "create",
+        "messaging.destination.name": topic,
+        "messaging.batch.message_count": count,
+        "barber.event_type": event_type,
+    }
+    if event_id is not None:
+        attributes["messaging.message.id"] = str(event_id)
+    return trace.get_tracer(__name__).start_as_current_span(
+        f"create {topic}", kind=trace.SpanKind.PRODUCER, attributes=attributes
+    )

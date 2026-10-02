@@ -9,8 +9,14 @@ COMPOSE_OBS_FILE := deploy/compose/docker-compose.obs.yml
 SIGNING_KEY := deploy/compose/secrets/auth-signing-key.pem
 COMPOSE := docker compose -f $(COMPOSE_FILE)
 COMPOSE_WITH_OBS := docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OBS_FILE)
+OBS_CONTAINERS := prometheus grafana tempo loki alloy alertmanager
+# The same images as docker-compose.obs.yml: the rules are checked by the
+# promtool of the Prometheus that will load them.
+PROMETHEUS_IMAGE := prom/prometheus:v3.5.0
+ALERTMANAGER_IMAGE := prom/alertmanager:v0.28.1
+OBSERVABILITY_DIR := deploy/observability
 
-.PHONY: help sync hooks check lint format type test test-unit keys up up-obs down logs migrate seed kind-up kind-down clean
+.PHONY: help sync hooks check lint format type test test-unit alerts-check keys up obs-up obs-down down logs migrate seed kind-up kind-down clean
 
 help: ## Show available commands
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -48,6 +54,14 @@ test: ## Run the whole test suite
 test-unit: ## Run only the tests that need no Docker
 	@$(UV) run pytest -m "not integration"; status=$$?; test $$status -eq 0 -o $$status -eq 5
 
+alerts-check: ## Check the alerting rules, run their unit tests, check the routing
+	docker run --rm -v "$(CURDIR)/$(OBSERVABILITY_DIR):/rules:ro" -w /rules/alerts \
+		--entrypoint promtool $(PROMETHEUS_IMAGE) check rules rules.yaml
+	docker run --rm -v "$(CURDIR)/$(OBSERVABILITY_DIR):/rules:ro" -w /rules/alerts \
+		--entrypoint promtool $(PROMETHEUS_IMAGE) test rules rules.test.yaml
+	docker run --rm -v "$(CURDIR)/$(OBSERVABILITY_DIR):/rules:ro" \
+		--entrypoint amtool $(ALERTMANAGER_IMAGE) check-config /rules/alertmanager.yaml
+
 keys: $(SIGNING_KEY) ## Generate the local RS256 signing key of auth, if absent
 
 # Never regenerated over an existing file: the kid is derived from the key, so
@@ -66,13 +80,22 @@ up: keys ## Start the local environment
 	@test -f $(COMPOSE_FILE) || { echo "$(COMPOSE_FILE) not found"; exit 1; }
 	$(COMPOSE) up -d --build
 
-up-obs: keys ## Start the local environment together with the observability profile
+obs-up: keys ## Start the local environment with Prometheus, Alertmanager, Grafana, Tempo, Loki and Alloy
 	@test -f $(COMPOSE_FILE) || { echo "$(COMPOSE_FILE) not found"; exit 1; }
 	$(COMPOSE_WITH_OBS) up -d --build
+	@echo "Grafana: http://localhost:3000  Prometheus: http://localhost:9090"
+
+# The services are brought up again from the main file alone: that recreates
+# them with tracing off, instead of leaving them exporting to a Tempo that is gone.
+obs-down: ## Stop the observability profile, keep the local environment running
+	$(COMPOSE_WITH_OBS) rm --stop --force $(OBS_CONTAINERS)
+	$(COMPOSE) up -d
 
 down: ## Stop the local environment
 	@test -f $(COMPOSE_FILE) || { echo "$(COMPOSE_FILE) not found"; exit 1; }
-	$(COMPOSE) down -v
+	@# The containers of the observability profile belong to the same project,
+	@# and without --remove-orphans they would outlive the stack.
+	$(COMPOSE) down -v --remove-orphans
 
 logs: ## Follow the local environment logs
 	@test -f $(COMPOSE_FILE) || { echo "$(COMPOSE_FILE) not found"; exit 1; }

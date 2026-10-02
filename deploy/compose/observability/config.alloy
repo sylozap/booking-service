@@ -1,0 +1,82 @@
+// Logs of the local stack: stdout of the containers, through the Docker
+// socket, into Loki.
+//
+// Only the five services and their migrations. The infrastructure logs in
+// formats of its own, and Kafka alone would outweigh everything else.
+//
+// The labels are the ones of low cardinality and nothing else: service, env,
+// level. trace_id goes into structured metadata -- not a label, so it creates
+// no stream per request, yet a query filters on it without parsing the line,
+// and Grafana links from it to Tempo. correlation_id and user_id stay fields of
+// the record.
+
+discovery.docker "containers" {
+	host = "unix:///var/run/docker.sock"
+
+	filter {
+		name   = "label"
+		values = ["com.docker.compose.project=barber"]
+	}
+}
+
+discovery.relabel "services" {
+	targets = discovery.docker.containers.targets
+
+	rule {
+		source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+		regex         = "(api-gateway|auth|catalog|booking|notification)(-migrate)?"
+		action        = "keep"
+	}
+
+	rule {
+		source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+		target_label  = "service"
+	}
+
+	// Set here rather than read from the record: a line that is not JSON -- a
+	// traceback printed before logging is configured -- still belongs somewhere.
+	rule {
+		target_label = "env"
+		replacement  = "local"
+	}
+}
+
+loki.source.docker "services" {
+	host             = "unix:///var/run/docker.sock"
+	targets          = discovery.relabel.services.output
+	refresh_interval = "5s"
+	forward_to       = [loki.process.services.receiver]
+}
+
+loki.process "services" {
+	stage.json {
+		expressions = {
+			level     = "level",
+			timestamp = "timestamp",
+			trace_id  = "trace_id",
+		}
+	}
+
+	stage.labels {
+		values = {level = ""}
+	}
+
+	stage.structured_metadata {
+		values = {trace_id = ""}
+	}
+
+	// The time the service wrote, not the time Alloy read it: after a restart of
+	// Alloy the backlog would otherwise land at one moment.
+	stage.timestamp {
+		source = "timestamp"
+		format = "RFC3339Nano"
+	}
+
+	forward_to = [loki.write.local.receiver]
+}
+
+loki.write "local" {
+	endpoint {
+		url = "http://loki:3100/loki/api/v1/push"
+	}
+}

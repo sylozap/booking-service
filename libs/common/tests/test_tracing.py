@@ -10,12 +10,13 @@ import pytest
 from fastapi import APIRouter
 from opentelemetry import trace
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.util._once import Once
 
 from barber_common.app import create_app
 from barber_common.config import BaseAppSettings
-from barber_common.tracing import configure_tracing
+from barber_common.tracing import OrphanDatabaseSpanFilter, configure_tracing
 
 router = APIRouter()
 
@@ -145,3 +146,43 @@ async def test_probes_do_not_produce_spans(
     flush_spans()
 
     assert server_spans(exporter) == []
+
+
+def filtered_tracer() -> tuple[trace.Tracer, InMemorySpanExporter]:
+    """A tracer of its own, behind the filter, with no global state touched."""
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(OrphanDatabaseSpanFilter(SimpleSpanProcessor(exporter)))
+    return provider.get_tracer(__name__), exporter
+
+
+def test_database_span_outside_any_operation_is_not_exported() -> None:
+    tracer, exporter = filtered_tracer()
+
+    # The attribute arrives after the start, as the instrumentation sets it.
+    with tracer.start_as_current_span("SELECT booking", kind=trace.SpanKind.CLIENT) as span:
+        span.set_attribute("db.system", "postgresql")
+
+    assert exporter.get_finished_spans() == ()
+
+
+def test_database_span_inside_an_operation_is_exported() -> None:
+    tracer, exporter = filtered_tracer()
+
+    with tracer.start_as_current_span("POST /bookings"):
+        with tracer.start_as_current_span("INSERT booking", kind=trace.SpanKind.CLIENT) as span:
+            span.set_attribute("db.system", "postgresql")
+
+    assert [span.name for span in exporter.get_finished_spans()] == [
+        "INSERT booking",
+        "POST /bookings",
+    ]
+
+
+def test_root_span_of_anything_else_is_exported() -> None:
+    tracer, exporter = filtered_tracer()
+
+    with tracer.start_as_current_span("publish booking.bookings.v1", kind=trace.SpanKind.PRODUCER):
+        pass
+
+    assert len(exporter.get_finished_spans()) == 1

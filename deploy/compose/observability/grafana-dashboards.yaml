@@ -1,0 +1,17 @@
+# Dashboards come from files in git, never from the UI: recreating Grafana
+# must not lose anything. The directory is deploy/observability/dashboards,
+# shared with the cluster.
+
+apiVersion: 1
+
+providers:
+  - name: barber
+    folder: Barber
+    type: file
+    disableDeletion: true
+    # An edit in the UI would be lost on the next restart; refusing it says so
+    # at once. A change is made in the JSON file instead.
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards

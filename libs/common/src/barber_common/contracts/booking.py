@@ -1,17 +1,24 @@
-"""Bodies of ``GET /api/v1/availability``."""
+"""Contracts of the booking endpoints other services call.
+
+``GET /api/v1/availability`` is public, and the gateway calls it for the
+nearest free slots on the card of a master. :class:`AvailabilityResponse` is
+what booking answers and what the gateway reads.
+"""
 
 from __future__ import annotations
 
 import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 __all__ = ["AvailabilityResponse", "DayAvailability"]
 
 
 class DayAvailability(BaseModel):
     """The free starts of one date of the salon's calendar."""
+
+    model_config = ConfigDict(extra="ignore")
 
     # Annotated through the module: a field called ``date`` whose type is also
     # called ``date`` is a name pydantic cannot resolve.
@@ -21,6 +28,8 @@ class DayAvailability(BaseModel):
 
 class AvailabilityResponse(BaseModel):
     """What a client needs to draw a calendar of one master and one service."""
+
+    model_config = ConfigDict(extra="ignore")
 
     master_id: UUID
     service_id: UUID

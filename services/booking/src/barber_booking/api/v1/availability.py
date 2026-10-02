@@ -16,7 +16,7 @@ from fastapi import APIRouter, Query, status
 
 from barber_booking.api.v1.dependencies import ReadAvailabilityScenario
 from barber_booking.domain.identifiers import MasterId, ServiceId
-from barber_booking.schemas.availability import AvailabilityResponse
+from barber_common.contracts.booking import AvailabilityResponse
 
 __all__ = ["router"]
 

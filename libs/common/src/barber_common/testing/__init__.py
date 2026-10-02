@@ -20,6 +20,7 @@ from barber_common.testing.fixtures import (
     read_events,
     wait_for,
 )
+from barber_common.testing.tracing import recorded_spans
 
 __all__ = [
     "app_client",
@@ -31,5 +32,6 @@ __all__ = [
     "isolated_session_factory",
     "outbox_message_factory",
     "read_events",
+    "recorded_spans",
     "wait_for",
 ]

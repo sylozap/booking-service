@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from barber_common.auth import ACCESS_TOKEN_TYPE, StaticKeys, TokenVerifier, use_authentication
 from barber_common.config import Environment
+from barber_common.context import get_correlation_id
 from barber_common.db import Database, create_engine, get_session
 from barber_common.db.session import transaction
 from barber_common.testing.fixtures import (
@@ -282,6 +283,8 @@ class RecordingProvider:
         self._name = name
         self.sent: list[tuple[str, Message]] = []
         self.answers: list[DeliveryResult] = []
+        # The correlation id each message went out under, for the tracing tests.
+        self.correlation_ids: list[str | None] = []
 
     @property
     def name(self) -> str:
@@ -289,6 +292,7 @@ class RecordingProvider:
 
     async def send(self, address: str, message: Message) -> DeliveryResult:
         self.sent.append((address, message))
+        self.correlation_ids.append(get_correlation_id())
         return self.answers.pop(0) if self.answers else DeliveryResult.sent()
 
 
