@@ -20,6 +20,9 @@ env:
   UV_VERSION: "0.12.8"
   PYTHON_VERSION: "3.12"
   REGISTRY: ghcr.io
+  # The versions a developer is expected to run locally (docs/10-infrastructure.md).
+  HELM_VERSION: "v3.22.0"
+  KUBECONFORM_VERSION: "v0.8.0"
 
 jobs:
   lint:
@@ -81,6 +84,11 @@ jobs:
 
       - run: uv sync --all-packages --frozen
 
+      # tests/deploy render the charts; without helm they would be skipped.
+      - uses: azure/setup-helm@v4
+        with:
+          version: ${{ env.HELM_VERSION }}
+
       - name: pytest
         run: uv run pytest --cov=libs/common/src --cov=services --cov-report=term-missing
 
@@ -93,6 +101,25 @@ jobs:
       - uses: actions/checkout@v5
 
       - run: make alerts-check
+
+  helm:
+    # helm lint, and every rendered manifest validated against the schemas of
+    # the Kubernetes that kind runs -- for each service, with and without the
+    # local overlay.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Install kubeconform
+        run: |
+          curl -sSL "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin kubeconform
+
+      - run: make helm-check
 
   changes:
     # Which services a change touched, so the build below is not five images

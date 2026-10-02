@@ -1,0 +1,36 @@
+# booking: schedules, availability, bookings. Holds the main invariant of the
+# platform and takes the heaviest load after the gateway.
+
+image:
+  name: booking
+
+port: 8003
+replicas: 2
+
+env:
+  CATALOG_URL: http://catalog:8002
+  AUTH_URL: http://auth:8001
+  SERVICE_CLIENT_ID: booking
+
+# SERVICE_CLIENT_SECRET: what booking exchanges for a service token in auth;
+# the same value as the entry of booking in SERVICE_CLIENTS of auth.
+secret:
+  enabled: true
+  keys:
+    - DATABASE_DSN
+    - SERVICE_CLIENT_SECRET
+
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: "1"
+    memory: 512Mi
+
+consumes:
+  - catalog.masters.v1
+  - catalog.services.v1
+
+migrations:
+  enabled: true

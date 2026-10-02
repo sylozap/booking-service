@@ -52,10 +52,10 @@ spec:
           envFrom:
             - configMapRef:
                 name: {{ include "service.name" . }}
-            {{- if .Values.secret.enabled }}
-            - secretRef:
-                name: {{ include "service.secretName" . }}
-            {{- end }}
+          {{- if .Values.secret.enabled }}
+          env:
+            {{- include "service.secretEnv" (dict "context" . "keys" .Values.secret.keys) | nindent 12 }}
+          {{- end }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
           resources:

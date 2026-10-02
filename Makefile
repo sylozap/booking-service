@@ -15,8 +15,15 @@ OBS_CONTAINERS := prometheus grafana tempo loki alloy alertmanager
 PROMETHEUS_IMAGE := prom/prometheus:v3.5.0
 ALERTMANAGER_IMAGE := prom/alertmanager:v0.28.1
 OBSERVABILITY_DIR := deploy/observability
+# The charts, and the Kubernetes the rendered manifests are validated against:
+# the version of the node image of kind.
+SERVICE_CHART := deploy/helm/service
+HELM_VALUES := deploy/helm/values
+HELM_SERVICES := api-gateway auth catalog booking notification
+KUBERNETES_VERSION := 1.37.0
+KUBECONFORM := kubeconform -strict -summary -kubernetes-version $(KUBERNETES_VERSION)
 
-.PHONY: help sync hooks check lint format type test test-unit alerts-check keys up obs-up obs-down down logs migrate seed kind-up kind-down clean
+.PHONY: help sync hooks check lint format type test test-unit alerts-check helm-check keys up obs-up obs-down down logs migrate seed kind-up kind-down clean
 
 help: ## Show available commands
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -61,6 +68,17 @@ alerts-check: ## Check the alerting rules, run their unit tests, check the routi
 		--entrypoint promtool $(PROMETHEUS_IMAGE) test rules rules.test.yaml
 	docker run --rm -v "$(CURDIR)/$(OBSERVABILITY_DIR):/rules:ro" \
 		--entrypoint amtool $(ALERTMANAGER_IMAGE) check-config /rules/alertmanager.yaml
+
+helm-check: ## Lint the Helm charts and validate what they render for every service
+	@for service in $(HELM_SERVICES); do \
+		for overlay in "" "$(HELM_VALUES)/local.yaml"; do \
+			echo "==> $$service $${overlay:+with $$overlay}"; \
+			files="-f $(HELM_VALUES)/common.yaml -f $(HELM_VALUES)/$$service.yaml $${overlay:+-f $$overlay}"; \
+			helm lint --strict $(SERVICE_CHART) $$files --set image.tag=check --quiet || exit 1; \
+			helm template $$service $(SERVICE_CHART) --namespace barber $$files --set image.tag=check \
+				| $(KUBECONFORM) - || exit 1; \
+		done; \
+	done
 
 keys: $(SIGNING_KEY) ## Generate the local RS256 signing key of auth, if absent
 

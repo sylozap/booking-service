@@ -1,0 +1,29 @@
+# What the five releases share. Layered first, under the file of the service:
+#
+#   helm upgrade --install booking deploy/helm/service --namespace barber \
+#     -f deploy/helm/values/common.yaml \
+#     -f deploy/helm/values/booking.yaml \
+#     [-f deploy/helm/values/local.yaml] \
+#     --set image.tag=<commit sha>
+#
+# Kept in one place because a setting every service must agree on -- the
+# issuer of tokens, the address of the broker -- copied five times is a
+# setting that one day disagrees with itself.
+
+image:
+  # Where CI pushes: ghcr.io/<repository>/<service>:<sha>. The tag is given at
+  # install time, never written here.
+  registry: ghcr.io/sylozap/booking-service
+
+env:
+  ENVIRONMENT: prod
+  LOG_LEVEL: INFO
+  # The infrastructure lives in its own namespace (deploy/helm/infra).
+  REDIS_DSN: redis://redis.barber-infra.svc.cluster.local:6379/0
+  KAFKA_BOOTSTRAP_SERVERS: kafka.barber-infra.svc.cluster.local:9092
+  # Every service verifies the tokens it receives itself, against the keys of
+  # auth. The services share the namespace barber, so a short name resolves.
+  JWT_ISSUER: https://barber.local/auth
+  JWKS_URL: http://auth:8001
+  # Turned on with the observability namespace (deploy/helm/observability).
+  OTLP_ENABLED: "false"

@@ -7,6 +7,8 @@ test renders the chart with the values it is about and looks at the result.
 
 from __future__ import annotations
 
+import importlib
+import re
 import shutil
 import subprocess
 from collections.abc import Callable, Mapping
@@ -16,6 +18,8 @@ from typing import Any
 import pytest
 import yaml
 
+from barber_common.config import BaseAppSettings
+
 ROOT = Path(__file__).resolve().parents[2]
 CHART = ROOT / "deploy/helm/service"
 
@@ -24,8 +28,9 @@ Render = Callable[..., list[Manifest]]
 
 # Enough for the chart to render: an image and the resources it insists on.
 MINIMAL: Mapping[str, Any] = {
-    "image": {"repository": "ghcr.io/example/booking", "tag": "abc123"},
+    "image": {"registry": "ghcr.io/example", "name": "booking", "tag": "abc123"},
     "port": 8003,
+    "secret": {"keys": ["DATABASE_DSN"]},
     "resources": {
         "requests": {"cpu": "100m", "memory": "128Mi"},
         "limits": {"cpu": "500m", "memory": "256Mi"},
@@ -146,23 +151,32 @@ def test_configmap_carries_env_and_the_service_name(render: Render) -> None:
     assert data == {"SERVICE_NAME": "booking", "LOG_LEVEL": "INFO", "CACHE_TTL_SECONDS": "300"}
 
 
-def test_container_reads_the_configmap_and_the_existing_secret(render: Render) -> None:
-    manifests = render()
+def test_container_reads_the_configmap_and_each_key_of_the_secret(render: Render) -> None:
+    manifests = render({"secret": {"keys": ["DATABASE_DSN", "SERVICE_CLIENT_SECRET"]}})
 
-    env_from = container_of(only(manifests, "Deployment"))["envFrom"]
+    container = container_of(only(manifests, "Deployment"))
 
-    assert env_from == [
-        {"configMapRef": {"name": "booking"}},
-        {"secretRef": {"name": "booking-env"}},
+    assert container["envFrom"] == [{"configMapRef": {"name": "booking"}}]
+    assert [
+        (variable["name"], variable["valueFrom"]["secretKeyRef"]) for variable in container["env"]
+    ] == [
+        ("DATABASE_DSN", {"name": "booking-env", "key": "DATABASE_DSN"}),
+        ("SERVICE_CLIENT_SECRET", {"name": "booking-env", "key": "SERVICE_CLIENT_SECRET"}),
     ]
 
 
 def test_service_without_secrets_references_none(render: Render) -> None:
     manifests = render({"secret": {"enabled": False}})
 
-    env_from = container_of(only(manifests, "Deployment"))["envFrom"]
+    container = container_of(only(manifests, "Deployment"))
 
-    assert env_from == [{"configMapRef": {"name": "booking"}}]
+    assert container["envFrom"] == [{"configMapRef": {"name": "booking"}}]
+    assert "env" not in container
+
+
+def test_render_fails_when_a_secret_is_enabled_without_keys(render: Render) -> None:
+    with pytest.raises(RenderError, match="secret.keys is empty"):
+        render({"secret": {"keys": []}})
 
 
 def test_changed_env_changes_the_pod_template(render: Render) -> None:
@@ -225,7 +239,7 @@ def test_render_fails_without_requests(render: Render) -> None:
 
 def test_render_fails_without_an_image_tag(render: Render) -> None:
     values = merge(MINIMAL, {})
-    values["image"] = {"repository": "ghcr.io/example/booking"}
+    values["image"] = {"registry": "ghcr.io/example", "name": "booking"}
 
     with pytest.raises(RenderError, match="image.tag is required"):
         render(values, base=False)
@@ -252,3 +266,158 @@ def test_rollout_never_drops_below_the_replica_count(render: Render) -> None:
 
     assert deployment["spec"]["replicas"] == 3
     assert deployment["spec"]["strategy"]["rollingUpdate"]["maxUnavailable"] == 0
+
+
+# --- the values of the five services ----------------------------------------
+#
+# A service is its values file and nothing else. These tests render each one
+# the way it is installed and hold it to what the code of the service expects:
+# the port its image listens on, the settings it reads, the topics it consumes.
+
+VALUES = ROOT / "deploy/helm/values"
+COMMON = VALUES / "common.yaml"
+LOCAL = VALUES / "local.yaml"
+SERVICES = ("api-gateway", "auth", "catalog", "booking", "notification")
+TAG = "0123abc"
+
+SETTINGS = {
+    "api-gateway": "barber_gateway.settings:GatewaySettings",
+    "auth": "barber_auth.settings:AuthSettings",
+    "catalog": "barber_catalog.settings:CatalogSettings",
+    "booking": "barber_booking.settings:BookingSettings",
+    "notification": "barber_notification.settings:NotificationSettings",
+}
+
+# The topics each service subscribes to, as its consumers declare them.
+CONSUMED_TOPICS = {
+    "api-gateway": (),
+    "auth": (),
+    "catalog": (),
+    "booking": (
+        "barber_booking.consumers.catalog_events:CATALOG_TOPICS",
+        "barber_booking.consumers.master_lifecycle:MASTER_LIFECYCLE_TOPICS",
+    ),
+    "notification": (
+        "barber_notification.consumers.user_events:USER_EVENTS_TOPICS",
+        "barber_notification.consumers.booking_events:BOOKING_EVENTS_TOPICS",
+    ),
+}
+
+
+def _attribute(reference: str) -> object:
+    module, _, attribute = reference.partition(":")
+    return getattr(importlib.import_module(module), attribute)
+
+
+def settings_of(service: str) -> type[BaseAppSettings]:
+    settings = _attribute(SETTINGS[service])
+    assert isinstance(settings, type) and issubclass(settings, BaseAppSettings)
+    return settings
+
+
+def topics_of(reference: str) -> tuple[str, ...]:
+    topics = _attribute(reference)
+    assert isinstance(topics, tuple)
+    return topics
+
+
+@pytest.fixture
+def render_service(tmp_path: Path) -> Callable[..., list[Manifest]]:
+    """Render a service as it is installed: common, its own file, maybe local."""
+
+    def _render(service: str, *, local: bool = False) -> list[Manifest]:
+        tag = tmp_path / "tag.yaml"
+        tag.write_text(yaml.safe_dump({"image": {"tag": TAG}}), encoding="utf-8")
+        files = [COMMON, VALUES / f"{service}.yaml", tag]
+        if local:
+            files.append(LOCAL)
+        return render_chart(CHART, service, files)
+
+    return _render
+
+
+def values_of(service: str) -> dict[str, Any]:
+    loaded: dict[str, Any] = yaml.safe_load((VALUES / f"{service}.yaml").read_text())
+    return loaded
+
+
+@pytest.mark.parametrize("service", SERVICES)
+def test_service_renders_from_its_values_alone(
+    render_service: Callable[..., list[Manifest]], service: str
+) -> None:
+    deployment = only(render_service(service), "Deployment")
+
+    container = container_of(deployment)
+
+    assert deployment["metadata"]["name"] == service
+    assert container["image"] == f"ghcr.io/sylozap/booking-service/{service}:{TAG}"
+    assert deployment["spec"]["replicas"] == 2
+    assert container["resources"]["limits"].keys() >= {"cpu", "memory"}
+
+
+@pytest.mark.parametrize("service", SERVICES)
+def test_port_is_the_one_the_image_listens_on(
+    render_service: Callable[..., list[Manifest]], service: str
+) -> None:
+    dockerfile = (ROOT / f"services/{service}/Dockerfile").read_text()
+    exposed = re.search(r"^EXPOSE (\d+)$", dockerfile, re.MULTILINE)
+    assert exposed is not None
+
+    port = container_of(only(render_service(service), "Deployment"))["ports"][0]
+
+    assert port["containerPort"] == int(exposed.group(1))
+
+
+@pytest.mark.parametrize("service", SERVICES)
+def test_every_variable_is_a_setting_of_the_service(
+    render_service: Callable[..., list[Manifest]], service: str
+) -> None:
+    manifests = render_service(service)
+    settings = settings_of(service)
+    fields = {name.upper() for name in settings.model_fields}
+
+    configured = set(only(manifests, "ConfigMap")["data"])
+    container = container_of(only(manifests, "Deployment"))
+    secret = {variable["name"] for variable in container.get("env", [])}
+
+    assert configured | secret <= fields
+
+
+@pytest.mark.parametrize("service", SERVICES)
+def test_every_required_setting_is_provided(
+    render_service: Callable[..., list[Manifest]], service: str
+) -> None:
+    manifests = render_service(service)
+    settings = settings_of(service)
+    required = {
+        name.upper() for name, field in settings.model_fields.items() if field.is_required()
+    }
+
+    configured = set(only(manifests, "ConfigMap")["data"])
+    container = container_of(only(manifests, "Deployment"))
+    secret = {variable["name"] for variable in container.get("env", [])}
+
+    assert required <= configured | secret
+
+
+@pytest.mark.parametrize("service", SERVICES)
+def test_consumed_topics_are_the_ones_the_consumers_subscribe_to(service: str) -> None:
+    subscribed = {topic for reference in CONSUMED_TOPICS[service] for topic in topics_of(reference)}
+
+    documented = set(values_of(service).get("consumes", []))
+
+    assert documented == subscribed
+
+
+@pytest.mark.parametrize("service", SERVICES)
+def test_local_runs_one_replica_of_the_image_built_for_compose(
+    render_service: Callable[..., list[Manifest]], service: str
+) -> None:
+    deployment = only(render_service(service, local=True), "Deployment")
+
+    container = container_of(deployment)
+
+    assert deployment["spec"]["replicas"] == 1
+    assert container["image"] == f"barber/{service}:local"
+    assert container["imagePullPolicy"] == "Never"
+    assert container["resources"]["limits"] == {"cpu": "500m", "memory": "384Mi"}

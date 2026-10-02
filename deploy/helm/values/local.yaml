@@ -1,0 +1,26 @@
+# kind on a developer's machine, layered over the file of the service. One
+# replica and small limits: the whole platform, its infrastructure and its
+# observability have to fit into the memory of a laptop.
+
+image:
+  # The images "make up" builds for the compose stack, loaded into kind with
+  # "kind load docker-image". Never pulled: there is no registry behind them.
+  registry: barber
+  tag: local
+  pullPolicy: Never
+
+replicas: 1
+
+env:
+  ENVIRONMENT: local
+  LOG_LEVEL: DEBUG
+
+# Limits stay above the steady state of a Python service with its pools;
+# argon2id of auth is the one that needs the headroom.
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 384Mi

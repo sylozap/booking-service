@@ -8,9 +8,13 @@
 nameOverride: ""
 
 image:
-  # Both are required: an image without a tag is "latest", and "latest" makes
-  # two clusters run different code under one name.
-  repository: ""
+  # The image is <registry>/<name>:<tag>. The registry and the tag are shared
+  # by the five services and set once per environment; the name is the
+  # service's own. All three are required: an image without a tag is
+  # "latest", and "latest" makes two clusters run different code under one
+  # name.
+  registry: ""
+  name: ""
   tag: ""
   pullPolicy: IfNotPresent
 
@@ -27,9 +31,14 @@ env: {}
 # The Secret with the variables that are secret -- DATABASE_DSN and the like.
 # Not created by this chart: secrets are generated outside git and only
 # referenced here. Defaults to "<name>-env"; off for a service with no secrets.
+#
+# The keys are listed rather than taken wholesale with envFrom: the list is
+# the contract the secret generator follows, and a key missing from the
+# Secret stops the pod with its name instead of passing unnoticed.
 secret:
   enabled: true
   name: ""
+  keys: []
 
 # Secrets mounted as files rather than variables, such as the signing key of
 # auth. Each entry: secretName, key, mountPath.

@@ -1,0 +1,39 @@
+# auth: accounts, tokens, the keys every service verifies them with.
+
+image:
+  name: auth
+
+port: 8001
+replicas: 2
+
+env:
+  # The signing key arrives as a file from the Secret below, the same code path
+  # as the key mounted into the compose stack.
+  JWT_PRIVATE_KEY_PATH: /run/secrets/auth-signing-key.pem
+
+# SERVICE_CLIENTS: the m2m clients and their secrets, as JSON.
+secret:
+  enabled: true
+  keys:
+    - DATABASE_DSN
+    - SERVICE_CLIENTS
+
+secretFiles:
+  - secretName: auth-signing-key
+    key: private.pem
+    mountPath: /run/secrets/auth-signing-key.pem
+
+# argon2id takes 64 MiB and three passes per hash, so a burst of logins is a
+# burst of memory and CPU: the limits here are the highest of the platform.
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: "1"
+    memory: 512Mi
+
+consumes: []
+
+migrations:
+  enabled: true

@@ -19,13 +19,31 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version }}
 {{- end -}}
 
 {{- define "service.image" -}}
-{{- $repository := required "image.repository is required" .Values.image.repository -}}
+{{- $registry := required "image.registry is required" .Values.image.registry -}}
+{{- $name := required "image.name is required" .Values.image.name -}}
 {{- $tag := required "image.tag is required: an untagged image is \"latest\"" .Values.image.tag -}}
-{{- printf "%s:%s" $repository $tag -}}
+{{- printf "%s/%s:%s" $registry $name $tag -}}
 {{- end -}}
 
 {{- define "service.secretName" -}}
 {{- default (printf "%s-env" (include "service.name" .)) .Values.secret.name -}}
+{{- end -}}
+
+{{/*
+Variables taken one by one from the Secret of the service. Called with a
+dict: the root context, and the keys to take.
+*/}}
+{{- define "service.secretEnv" -}}
+{{- if not .keys -}}
+{{- fail (printf "%s: secret.keys is empty; list the keys, or set secret.enabled=false" (include "service.name" .context)) -}}
+{{- end -}}
+{{- range .keys }}
+- name: {{ . }}
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "service.secretName" $.context }}
+      key: {{ . }}
+{{- end }}
 {{- end -}}
 
 {{/*
