@@ -23,6 +23,7 @@ from barber_common.events.envelope import JsonEnvelope, build_envelope
 from barber_common.kafka.consumer import EventConsumer, RetryPolicy
 from barber_common.kafka.dlq import DeadLetterPublisher, dlq_topic_of
 from barber_common.kafka.producer import EventProducer
+from barber_common.metrics import REGISTRY
 from barber_common.outbox.models import OutboxMessage
 from barber_common.outbox.repository import OutboxRepository
 from barber_common.testing.fixtures import read_events
@@ -172,6 +173,35 @@ async def read_dead_letter(kafka_bootstrap: str, topic: str) -> dict[str, object
     return document
 
 
+def retries_of(topic: str) -> float | None:
+    return REGISTRY.get_sample_value(
+        "event_retries_total", {"topic": topic, "event_type": "test.happened"}
+    )
+
+
+async def test_the_dead_letter_counter_of_each_topic_starts_at_zero(
+    topic: str,
+    group_id: str,
+    kafka_bootstrap: str,
+    session_factory: async_sessionmaker[AsyncSession],
+    dead_letters: DeadLetterPublisher,
+) -> None:
+    build_consumer(
+        topic=topic,
+        group_id=group_id,
+        kafka_bootstrap=kafka_bootstrap,
+        session_factory=session_factory,
+        dead_letters=dead_letters,
+        handler=Handler(),
+    )
+
+    # Before a single message: increase() over a series born at one sees no
+    # growth, and the alert would miss the first dead letter.
+    for reason in ("invalid_message", "handler_failed"):
+        sample = REGISTRY.get_sample_value("dlq_messages_total", {"topic": topic, "reason": reason})
+        assert sample == 0.0
+
+
 async def test_a_redelivered_event_has_no_second_effect(
     topic: str,
     group_id: str,
@@ -199,6 +229,8 @@ async def test_a_redelivered_event_has_no_second_effect(
 
     assert handler.calls == 1
     assert await count_effects(engine) == 1
+    # Nothing failed, so nothing was tried again.
+    assert retries_of(topic) is None
 
 
 async def test_an_invalid_message_goes_to_the_dead_letter_topic_without_retries(
@@ -261,6 +293,8 @@ async def test_a_temporary_failure_is_retried_three_times_and_then_dead_lettered
     letter = await read_dead_letter(kafka_bootstrap, topic)
 
     assert handler.calls == FAST_RETRIES.attempts
+    # The first attempt is not a retry.
+    assert retries_of(topic) == FAST_RETRIES.attempts - 1
     assert letter["dlq_reason"] == "handler_failed"
     assert letter["dlq_attempts"] == FAST_RETRIES.attempts
     assert "RuntimeError" in str(letter["dlq_traceback"])

@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from barber_common.db import unit_of_work
 from barber_common.events.envelope import EventEnvelope
 from barber_common.kafka.producer import EventProducer
+from barber_common.metrics import REGISTRY
 from barber_common.outbox.models import OutboxMessage
 from barber_common.outbox.relay import OutboxRelay
 from barber_common.outbox.repository import OutboxRepository
@@ -222,6 +223,28 @@ async def test_pending_events_survive_a_broker_outage(
 
     assert await working.run_once() == 3
     assert await count_rows(engine, published=False) == 0
+
+
+async def test_the_gauges_keep_up_with_the_outbox_while_the_broker_is_down(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # The last good pass saw an empty outbox: the value a stale gauge would keep.
+    await OutboxRelay(session_factory=session_factory, producer=RecordingProducer()).run_once()
+    assert REGISTRY.get_sample_value("outbox_pending_messages") == 0
+    for _ in range(3):
+        await add_event(session_factory, booking_event())
+    failing = OutboxRelay(
+        session_factory=session_factory,
+        producer=RecordingProducer(fail_times=10),
+        idle_interval_seconds=0.01,
+    )
+
+    await failing._pass()
+
+    assert REGISTRY.get_sample_value("outbox_pending_messages") == 3
+    lag = REGISTRY.get_sample_value("outbox_publish_lag_seconds")
+    assert lag is not None
+    assert lag > 0
 
 
 async def test_a_batch_queues_one_event_per_aggregate_with_one_cause(

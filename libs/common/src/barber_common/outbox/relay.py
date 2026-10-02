@@ -127,8 +127,24 @@ class OutboxRelay:
             return await self.run_once()
         except Exception:
             _logger.exception("outbox relay pass failed")
+            await self._report_after_failure()
             await asyncio.sleep(self._idle_interval_seconds)
             return 0
+
+    async def _report_after_failure(self) -> None:
+        """Measure the outbox in a transaction of its own.
+
+        The failed pass rolled back before it got to measuring, and the gauges
+        would keep the last good value -- usually zero -- for as long as the
+        broker stays down: the alert on a stuck outbox would never fire. With
+        the database down too there is nothing to measure, and that outage
+        shows elsewhere.
+        """
+        try:
+            async with unit_of_work(self._session_factory) as session:
+                await self._report(OutboxRepository(session))
+        except Exception:
+            _logger.warning("outbox gauges not refreshed after a failed pass", exc_info=True)
 
     async def _publish(self, message: OutboxMessage) -> None:
         envelope: EventEnvelope[dict[str, object]] = EventEnvelope(

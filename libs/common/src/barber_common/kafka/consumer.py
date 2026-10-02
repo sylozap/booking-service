@@ -40,7 +40,7 @@ from barber_common.context import bind_causation, bind_context
 from barber_common.db.session import unit_of_work
 from barber_common.events.envelope import JsonEnvelope
 from barber_common.kafka.dedup import ProcessedEventRepository
-from barber_common.kafka.dlq import DeadLetter, DeadLetterPublisher
+from barber_common.kafka.dlq import DeadLetter, DeadLetterPublisher, start_dead_letter_counts
 from barber_common.logging import get_logger
 from barber_common.metrics import counter, gauge
 from barber_common.tracing import extract_trace_context
@@ -62,6 +62,15 @@ EVENTS_PROCESSED = counter(
     "events_processed_total",
     "Events taken off a topic, by what happened to them",
     labelnames=("topic", "event_type", "result"),
+)
+
+# A retry is a handler that failed and is about to run again: the attempts
+# before the last. Retries growing while the DLQ stays quiet is a dependency
+# that fails now and then -- the warning before messages start to be lost.
+EVENT_RETRIES = counter(
+    "event_retries_total",
+    "Handler attempts repeated after a failure",
+    labelnames=("topic", "event_type"),
 )
 
 # Consumer lag per partition; the number of partitions per topic is fixed, so
@@ -160,6 +169,7 @@ class EventConsumer:
             auto_offset_reset="earliest",
         )
         self._is_started = False
+        start_dead_letter_counts(topics)
 
     def register(self, event_type: str, handler: EventHandler) -> None:
         """Bind a handler to an event type. A second binding is a mistake."""
@@ -332,6 +342,9 @@ class EventConsumer:
                             error=type(error).__name__,
                         )
                         if attempt < self._retry_policy.attempts:
+                            EVENT_RETRIES.labels(
+                                topic=record.topic, event_type=envelope.event_type
+                            ).inc()
                             await asyncio.sleep(self._retry_policy.delay_for(attempt))
         except TimeoutError as error:
             last_error = error
