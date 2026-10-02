@@ -1,5 +1,5 @@
-# Loki as one process on the local disk. Logs arrive with Alloy (T7.6); until
-# then the data source is there and empty.
+# Loki as one process on the local disk. Logs arrive from Alloy
+# (config.alloy), trace_id as structured metadata, which schema v13 allows.
 
 auth_enabled: false
 
@@ -31,6 +31,11 @@ schema_config:
 
 limits_config:
   retention_period: 72h
+  # The labels are service, env and level, set by Alloy, and nothing else. Loki
+  # would add service_name copied from service, and a detected_level next to
+  # level: the same facts twice, under names the dashboards do not use.
+  discover_service_name: []
+  discover_log_levels: false
 
 analytics:
   reporting_enabled: false

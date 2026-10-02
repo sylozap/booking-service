@@ -57,7 +57,7 @@ notification `8004`. Исходники смонтированы в контей
 ## Наблюдаемость
 
 ```bash
-make obs-up     # стенд + Prometheus, Grafana, Tempo, Loki; трейсинг в сервисах включается
+make obs-up     # стенд + Prometheus, Grafana, Tempo, Loki, Alloy; трейсинг в сервисах включается
 make obs-down   # убрать профиль, сервисы остаются и перезапускаются без трейсинга
 ```
 
@@ -69,6 +69,7 @@ make obs-down   # убрать профиль, сервисы остаются �
 | Grafana, вход без логина | http://localhost:3000 |
 | Prometheus | http://localhost:9090 |
 | Tempo API | http://localhost:3200 |
+| Alloy, граф сбора логов | http://localhost:12345 |
 
 Конфигурация compose — `deploy/compose/observability/`, дашборды —
 `deploy/observability/dashboards/` (общие с кластером, в Grafana правятся
@@ -77,10 +78,10 @@ make obs-down   # убрать профиль, сервисы остаются �
 **Ручная проверка после `make obs-up`:**
 
 1. Prometheus → Status → Targets: пять целей `UP`.
-2. Grafana → Connections → Data sources: Prometheus, Tempo, Loki; Loki пока
-   пустой — логи в него собирает Alloy (T7.6).
-3. Grafana → Dashboards → Barber → System overview: данные на всех панелях
-   после трафика из шага 4.
+2. Grafana → Connections → Data sources: Prometheus, Tempo, Loki.
+3. Grafana → Dashboards → Barber: System overview — данные на всех панелях
+   после трафика из шага 4; Async — outbox, лаг, DLQ, планировщики; Business —
+   наполняется, когда в системе есть брони (seed-сценарий — T8.9).
 4. Трафик (до seed-скрипта из T8.9 — вручную; анонимный лимит гейтвея
    невелик, поэтому часть запросов идёт в сервисы напрямую):
 
@@ -100,6 +101,11 @@ make obs-down   # убрать профиль, сервисы остаются �
    `create auth.users.v1` и под ним `consume auth.users.v1` в `notification`.
    Span `publish auth.users.v1` relay лежит отдельным трейсом со ссылкой
    на `create` — так задумано, см. [docs/11-observability.md](docs/11-observability.md#трассировка).
+6. Логи трейса: в трейсе из шага 5 у span'а кнопка **Logs for this span** —
+   открываются записи Loki всего трейса из всех сервисов (`auth` и
+   `notification`). Обратно: в записи Loki поле `trace_id` → **Open the trace**.
+   Метки Loki — только `service`, `env`, `level`; `trace_id` — structured
+   metadata, `correlation_id` и `user_id` — поля записи.
 
 ## Структура
 

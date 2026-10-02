@@ -9,7 +9,7 @@ COMPOSE_OBS_FILE := deploy/compose/docker-compose.obs.yml
 SIGNING_KEY := deploy/compose/secrets/auth-signing-key.pem
 COMPOSE := docker compose -f $(COMPOSE_FILE)
 COMPOSE_WITH_OBS := docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OBS_FILE)
-OBS_CONTAINERS := prometheus grafana tempo loki
+OBS_CONTAINERS := prometheus grafana tempo loki alloy
 
 .PHONY: help sync hooks check lint format type test test-unit keys up obs-up obs-down down logs migrate seed kind-up kind-down clean
 
@@ -67,7 +67,7 @@ up: keys ## Start the local environment
 	@test -f $(COMPOSE_FILE) || { echo "$(COMPOSE_FILE) not found"; exit 1; }
 	$(COMPOSE) up -d --build
 
-obs-up: keys ## Start the local environment with Prometheus, Grafana, Tempo and Loki
+obs-up: keys ## Start the local environment with Prometheus, Grafana, Tempo, Loki and Alloy
 	@test -f $(COMPOSE_FILE) || { echo "$(COMPOSE_FILE) not found"; exit 1; }
 	$(COMPOSE_WITH_OBS) up -d --build
 	@echo "Grafana: http://localhost:3000  Prometheus: http://localhost:9090"

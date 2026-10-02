@@ -1,4 +1,4 @@
-# The observability profile: Prometheus, Grafana, Tempo and Loki.
+# The observability profile: Prometheus, Grafana, Tempo, Loki and Alloy.
 #
 # Started together with the main stack, never instead of it:
 #
@@ -12,7 +12,8 @@
 # Besides its own containers, the file turns tracing on in the five services:
 # with Tempo absent they would spend their time failing to export.
 #
-# Grafana: http://localhost:3000 (no login), Prometheus: http://localhost:9090.
+# Grafana: http://localhost:3000 (no login), Prometheus: http://localhost:9090,
+# Alloy: http://localhost:12345.
 
 x-tracing: &tracing
   OTLP_ENABLED: "true"
@@ -57,6 +58,25 @@ services:
     volumes:
       - ./observability/loki.yaml:/etc/loki/loki.yaml:ro
     mem_limit: 384m
+    restart: unless-stopped
+
+  alloy:
+    image: grafana/alloy:v1.10.2
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    ports:
+      - "12345:12345"
+    volumes:
+      - ./observability/config.alloy:/etc/alloy/config.alloy:ro
+      # Read only, and only on a local stack: the socket is root on the host.
+      # In the cluster the logs come from the node, not from Docker.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - loki
+    mem_limit: 256m
     restart: unless-stopped
 
   grafana:
