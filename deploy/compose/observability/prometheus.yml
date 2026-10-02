@@ -8,6 +8,16 @@ global:
   scrape_interval: 15s
   evaluation_interval: 15s
 
+# The rules are deploy/observability/alerts/rules.yaml, mounted here; the
+# test file next to them is not a rule file and is not mounted.
+rule_files:
+  - /etc/prometheus/rules/rules.yaml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
 scrape_configs:
   - job_name: api-gateway
     static_configs:

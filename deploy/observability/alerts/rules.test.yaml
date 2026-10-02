@@ -1,0 +1,257 @@
+# Unit tests of rules.yaml for "promtool test rules": every alert fires when
+# it should and stays quiet when it should not. Run by "make alerts-check".
+#
+# Series notation: "a+bxN" is a, then N more samples each b higher; "_" is a
+# missing sample. One sample per interval, 15 s as in prometheus.yml.
+
+rule_files:
+  - rules.yaml
+
+evaluation_interval: 15s
+
+tests:
+  # --- ServiceDown ----------------------------------------------------------
+
+  - interval: 15s
+    input_series:
+      - series: 'up{service="booking"}'
+        values: "1x4 0x8"
+      - series: 'up{service="catalog"}'
+        values: "1x12"
+    alert_rule_test:
+      # Down for 45 s: not yet a minute.
+      - eval_time: 105s
+        alertname: ServiceDown
+        exp_alerts: []
+      - eval_time: 180s
+        alertname: ServiceDown
+        exp_alerts:
+          - exp_labels: { severity: critical, service: booking }
+            exp_annotations:
+              summary: "booking does not answer the scrape"
+              description: >-
+                Prometheus has not reached /metrics of booking for a
+                minute. Check whether the container runs and why it stopped:
+                "docker compose ps", then the logs of booking in Loki.
+                A restart loop shows as restarts on the overview dashboard. The
+                other alerts of this service are held back while it is down.
+              dashboard: http://localhost:3000/d/barber-overview
+
+  # --- HighErrorRate --------------------------------------------------------
+
+  - interval: 15s
+    input_series:
+      # 10 requests per 15 s, one of them a 500: 10 % of errors.
+      - series: 'http_requests_total{service="booking", status="200"}'
+        values: "0+9x60"
+      - series: 'http_requests_total{service="booking", status="500"}'
+        values: "0+1x60"
+      # 2 % of errors: under the threshold.
+      - series: 'http_requests_total{service="catalog", status="200"}'
+        values: "0+49x60"
+      - series: 'http_requests_total{service="catalog", status="500"}'
+        values: "0+1x60"
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: HighErrorRate
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: HighErrorRate
+        exp_alerts:
+          - exp_labels: { severity: critical, service: booking }
+            exp_annotations:
+              summary: "booking answers 10% of requests with 5xx"
+              description: "More than 5 % of the requests of booking end in a server error. Find the route on the overview dashboard, then a failing request in Tempo; its logs open from the span. A 502 or 504 in the gateway is the service behind it."
+              dashboard: "http://localhost:3000/d/barber-overview"
+
+  # --- SlowAvailability -----------------------------------------------------
+
+  - interval: 15s
+    input_series:
+      # Every answer takes between 1 and 2.5 s.
+      - series: 'availability_query_duration_seconds_bucket{service="booking", source="database", le="1"}'
+        values: "0x80"
+      - series: 'availability_query_duration_seconds_bucket{service="booking", source="database", le="2.5"}'
+        values: "0+5x80"
+      - series: 'availability_query_duration_seconds_bucket{service="booking", source="database", le="+Inf"}'
+        values: "0+5x80"
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: SlowAvailability
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: SlowAvailability
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations:
+              summary: "p95 of availability is 2.425s"
+              description: "The availability query breaks its SLO of 1 s for ten minutes. Split the histogram by source: slow from the database is the query or the pool (database pool panel); slow from the cache is Redis. A cache that stopped hitting sends everything to the database."
+              dashboard: "http://localhost:3000/d/barber-overview"
+
+  - interval: 15s
+    input_series:
+      # Fast: everything under 250 ms.
+      - series: 'availability_query_duration_seconds_bucket{service="booking", source="cache", le="0.25"}'
+        values: "0+5x80"
+      - series: 'availability_query_duration_seconds_bucket{service="booking", source="cache", le="+Inf"}'
+        values: "0+5x80"
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: SlowAvailability
+        exp_alerts: []
+
+  # --- ConsumerLag ----------------------------------------------------------
+
+  - interval: 15s
+    input_series:
+      # Two replicas report the same partitions: max, not sum, across them.
+      - series: 'kafka_consumer_lag{service="notification", instance="a", group="notification.bookings", topic="booking.bookings.v1", partition="0"}'
+        values: "600x40"
+      - series: 'kafka_consumer_lag{service="notification", instance="b", group="notification.bookings", topic="booking.bookings.v1", partition="0"}'
+        values: "600x40"
+      - series: 'kafka_consumer_lag{service="notification", instance="a", group="notification.bookings", topic="booking.bookings.v1", partition="1"}'
+        values: "500x40"
+      - series: 'kafka_consumer_lag{service="booking", instance="a", group="booking.masters", topic="catalog.masters.v1", partition="0"}'
+        values: "900x40"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: ConsumerLag
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: ConsumerLag
+        exp_alerts:
+          - exp_labels: { severity: warning, group: notification.bookings }
+            exp_annotations:
+              summary: "Consumer group notification.bookings is 1100 messages behind"
+              description: "The group handles slower than its topics fill. Look at retries and handling results on the async dashboard: retries mean a slow or failing dependency of the handler, a flat lag that never moves means a consumer that stopped polling -- restart the service."
+              dashboard: "http://localhost:3000/d/barber-async"
+
+  # --- OutboxNotDraining ----------------------------------------------------
+
+  - interval: 15s
+    input_series:
+      # The relay stops at 1 min: the age of the oldest event grows from there.
+      - series: 'outbox_publish_lag_seconds{service="booking"}'
+        values: "0x4 0+15x40"
+      # A working relay under traffic: always something, never old.
+      - series: 'outbox_publish_lag_seconds{service="catalog"}'
+        values: "0.4x44"
+    alert_rule_test:
+      # 30 s crossed at 1.5 min; four more minutes are needed.
+      - eval_time: 5m
+        alertname: OutboxNotDraining
+        exp_alerts: []
+      # Within five minutes of the stop, as the plan asks.
+      - eval_time: 6m
+        alertname: OutboxNotDraining
+        exp_alerts:
+          - exp_labels: { severity: critical, service: booking }
+            exp_annotations:
+              summary: "The outbox of booking has not drained for minutes"
+              description: "The oldest unpublished event of booking is older than 30 s. The relay cannot publish: check Kafka first, then the \"outbox relay pass failed\" records of the service in Loki. Events are kept and go out once the cause is fixed; nothing is lost."
+              dashboard: "http://localhost:3000/d/barber-async"
+
+  # --- DeadLetters ----------------------------------------------------------
+
+  - interval: 15s
+    input_series:
+      # Started at zero by the consumer, one dead letter at 2 min.
+      - series: 'dlq_messages_total{service="notification", topic="booking.bookings.v1", reason="handler_failed"}'
+        values: "0x7 1x40"
+      - series: 'dlq_messages_total{service="notification", topic="booking.bookings.v1", reason="invalid_message"}'
+        values: "0x47"
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: DeadLetters
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: DeadLetters
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: notification
+              topic: booking.bookings.v1
+              reason: handler_failed
+            exp_annotations:
+              summary: "A message of booking.bookings.v1 went to the DLQ (handler_failed)"
+              description: "An event was accepted and not acted on. Read it from booking.bookings.v1.dlq: the headers hold the reason, the attempts and the traceback. invalid_message is a defect of the producer; handler_failed is a handler that failed every attempt -- fix the cause and replay the message."
+              dashboard: http://localhost:3000/d/barber-async
+      # Five minutes after, the alert resolves: the letter is history.
+      - eval_time: 8m
+        alertname: DeadLetters
+        exp_alerts: []
+
+  # --- NotificationDeliveryStalled ------------------------------------------
+
+  - interval: 15s
+    input_series:
+      - series: 'notifications_oldest_due_age_seconds{service="notification"}'
+        values: "0+15x30"
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: NotificationDeliveryStalled
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: NotificationDeliveryStalled
+        exp_alerts:
+          - exp_labels: { severity: critical }
+            exp_annotations:
+              summary: "A notification due for sending has waited 6m 0s"
+              description: "The delivery worker of notification does not send. Check that the service runs, then the \"delivery pass failed\" records in Loki and the send time of the channels on the business dashboard: a provider that hangs holds the worker."
+              dashboard: "http://localhost:3000/d/barber-async"
+
+  # --- ReminderSchedulerSilent ----------------------------------------------
+
+  - interval: 1m
+    input_series:
+      # Passes every minute until 3 min, then nothing: the last pass stays at 180.
+      - series: 'reminder_scheduler_last_run_timestamp{service="booking"}'
+        values: "0 60 120 180x20"
+      - series: 'process_start_time_seconds{service="booking"}'
+        values: "0x20"
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: ReminderSchedulerSilent
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: ReminderSchedulerSilent
+        exp_alerts:
+          - exp_labels: { severity: critical, service: booking }
+            exp_annotations:
+              summary: "The reminder scheduler has not completed a pass for five minutes"
+              description: "Clients stop getting reminders. The scheduler runs inside booking: look for \"reminder scheduler pass failed\" in its logs in Loki; a database that refuses connections is the usual cause. Reminders missed meanwhile go out on the first pass after, unless the visit has begun."
+              dashboard: "http://localhost:3000/d/barber-async"
+
+  - interval: 1m
+    input_series:
+      # A process started at 10 min that has not passed yet: zero is not silence.
+      - series: 'reminder_scheduler_last_run_timestamp{service="booking"}'
+        values: "_x10 0x4"
+      - series: 'process_start_time_seconds{service="booking"}'
+        values: "_x10 600x4"
+    alert_rule_test:
+      - eval_time: 13m
+        alertname: ReminderSchedulerSilent
+        exp_alerts: []
+
+  # --- AuthCleanupSilent ----------------------------------------------------
+
+  - interval: 10m
+    input_series:
+      # Hourly passes until 1 h, then nothing.
+      - series: 'auth_cleanup_last_success_timestamp{service="auth"}'
+        values: "0x5 3600x30"
+      - series: 'process_start_time_seconds{service="auth"}'
+        values: "0x35"
+    alert_rule_test:
+      - eval_time: 3h50m
+        alertname: AuthCleanupSilent
+        exp_alerts: []
+      - eval_time: 4h10m
+        alertname: AuthCleanupSilent
+        exp_alerts:
+          - exp_labels: { severity: warning, service: auth }
+            exp_annotations:
+              summary: "The cleanup of auth has not completed a pass for three hours"
+              description: "The tables of tokens grow and nothing is lost yet. Look for \"cleanup pass failed\" in the logs of auth in Loki. Expired rows are removed by the first pass that succeeds."
+              dashboard: "http://localhost:3000/d/barber-async"

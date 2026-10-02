@@ -1,4 +1,5 @@
-# The observability profile: Prometheus, Grafana, Tempo, Loki and Alloy.
+# The observability profile: Prometheus, Alertmanager, Grafana, Tempo, Loki
+# and Alloy.
 #
 # Started together with the main stack, never instead of it:
 #
@@ -13,7 +14,7 @@
 # with Tempo absent they would spend their time failing to export.
 #
 # Grafana: http://localhost:3000 (no login), Prometheus: http://localhost:9090,
-# Alloy: http://localhost:12345.
+# Alertmanager: http://localhost:9093, Alloy: http://localhost:12345.
 
 x-tracing: &tracing
   OTLP_ENABLED: "true"
@@ -37,7 +38,23 @@ services:
       - "9090:9090"
     volumes:
       - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # Shared with the cluster, like the dashboards.
+      - ../observability/alerts/rules.yaml:/etc/prometheus/rules/rules.yaml:ro
+    depends_on:
+      - alertmanager
     mem_limit: 512m
+    restart: unless-stopped
+
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yaml
+      - --storage.path=/alertmanager
+    ports:
+      - "9093:9093"
+    volumes:
+      - ../observability/alertmanager.yaml:/etc/alertmanager/alertmanager.yaml:ro
+    mem_limit: 128m
     restart: unless-stopped
 
   tempo:
@@ -97,6 +114,7 @@ services:
       - ../observability/dashboards:/var/lib/grafana/dashboards:ro
     depends_on:
       - prometheus
+      - alertmanager
       - tempo
       - loki
     mem_limit: 384m

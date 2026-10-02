@@ -57,7 +57,7 @@ notification `8004`. Исходники смонтированы в контей
 ## Наблюдаемость
 
 ```bash
-make obs-up     # стенд + Prometheus, Grafana, Tempo, Loki, Alloy; трейсинг в сервисах включается
+make obs-up     # стенд + Prometheus, Alertmanager, Grafana, Tempo, Loki, Alloy; трейсинг в сервисах включается
 make obs-down   # убрать профиль, сервисы остаются и перезапускаются без трейсинга
 ```
 
@@ -68,17 +68,20 @@ make obs-down   # убрать профиль, сервисы остаются �
 |---|---|
 | Grafana, вход без логина | http://localhost:3000 |
 | Prometheus | http://localhost:9090 |
+| Alertmanager | http://localhost:9093 |
 | Tempo API | http://localhost:3200 |
 | Alloy, граф сбора логов | http://localhost:12345 |
 
 Конфигурация compose — `deploy/compose/observability/`, дашборды —
-`deploy/observability/dashboards/` (общие с кластером, в Grafana правятся
-только через git).
+`deploy/observability/dashboards/`, алерты — `deploy/observability/alerts/`
+и `deploy/observability/alertmanager.yaml` (общие с кластером, в Grafana
+правятся только через git). `make alerts-check` проверяет правила, гоняет
+их юнит-тесты (`rules.test.yaml`) и проверяет маршрутизацию — то же делает CI.
 
 **Ручная проверка после `make obs-up`:**
 
 1. Prometheus → Status → Targets: пять целей `UP`.
-2. Grafana → Connections → Data sources: Prometheus, Tempo, Loki.
+2. Grafana → Connections → Data sources: Prometheus, Tempo, Loki, Alertmanager.
 3. Grafana → Dashboards → Barber: System overview — данные на всех панелях
    после трафика из шага 4; Async — outbox, лаг, DLQ, планировщики; Business —
    наполняется, когда в системе есть брони (seed-сценарий — T8.9).
@@ -106,6 +109,20 @@ make obs-down   # убрать профиль, сервисы остаются �
    `notification`). Обратно: в записи Loki поле `trace_id` → **Open the trace**.
    Метки Loki — только `service`, `env`, `level`; `trace_id` — structured
    metadata, `correlation_id` и `user_id` — поля записи.
+7. Алерт на DLQ: «ядовитое» сообщение в топик, который читает `notification`,
+
+   ```bash
+   echo '{ not json' | docker compose -f deploy/compose/docker-compose.yml exec -T kafka \
+     kafka-console-producer --bootstrap-server localhost:9092 --topic booking.bookings.v1
+   ```
+
+   В течение минуты Alertmanager (http://localhost:9093) показывает
+   `DeadLetters` с `reason=invalid_message`, дашборд Async — сообщение в DLQ.
+8. Алерт на вставший outbox: `docker compose -f deploy/compose/docker-compose.yml stop kafka`,
+   затем запись, которая пишет событие (регистрация из шага 4). На дашборде
+   Async «Waiting in the outbox» растёт в течение 5 с, через ~4,5 минуты
+   срабатывает `OutboxNotDraining`. После `... start kafka` outbox пустеет
+   и алерт гаснет.
 
 ## Структура
 

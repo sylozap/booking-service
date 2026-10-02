@@ -51,3 +51,14 @@ datasources:
           datasourceUid: tempo
           url: "$${__value.raw}"
           urlDisplayLabel: Open the trace
+
+  # The alerts of Prometheus as Alertmanager holds them: Grafana -> Alerting
+  # shows what fired, what is silenced and what is held back.
+  - name: Alertmanager
+    uid: alertmanager
+    type: alertmanager
+    access: proxy
+    url: http://alertmanager:9093
+    jsonData:
+      implementation: prometheus
+      handleGrafanaManagedAlerts: false
