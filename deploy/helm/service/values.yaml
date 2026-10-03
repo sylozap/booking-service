@@ -162,6 +162,10 @@ ingress:
   className: ""
   host: ""
 
-# Optional resources. Their templates arrive with the tasks that need them.
+# Scraping of /metrics by the Prometheus Operator. On everywhere, and created
+# only in a cluster that has the operator (deploy/helm/observability).
 serviceMonitor:
-  enabled: false
+  enabled: true
+  # The scrape interval of the compose stack: rate() over a window needs two
+  # scrapes in it, and the dashboards are built around 15 seconds.
+  interval: 15s

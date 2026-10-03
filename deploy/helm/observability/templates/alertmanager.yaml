@@ -1,0 +1,15 @@
+# The routing of deploy/observability/alertmanager.yaml, shared with the
+# compose stack. The Alertmanager of kube-prometheus-stack reads its whole
+# configuration from this Secret (alertmanager.alertmanagerSpec.configSecret);
+# a Secret because that is what the operator takes, not because anything in
+# it is secret.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: alertmanager-barber
+  labels:
+    {{- include "observability.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  alertmanager.yaml: |-
+    {{- .Files.Get "files/alertmanager.yaml" | nindent 4 }}

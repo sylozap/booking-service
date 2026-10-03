@@ -1,0 +1,162 @@
+# Values of kube-prometheus-stack, installed by scripts/obs_up.sh as the
+# release "monitoring" into the namespace observability:
+#
+#   helm upgrade --install monitoring prometheus-community/kube-prometheus-stack \
+#     --version <KUBE_PROMETHEUS_STACK_VERSION of obs_up.sh> \
+#     --namespace observability -f deploy/helm/observability/kube-prometheus-stack.yaml
+#
+# What the platform needs of it is the operator, Prometheus, Alertmanager and
+# Grafana. Everything else is turned off: on a laptop the rules and dashboards
+# of the whole Kubernetes mixin cost more memory than the platform itself, and
+# their targets -- etcd, the scheduler, the controller manager -- are not
+# reachable on kind and would only fire alerts about kind.
+
+# Short names: monitoring-prometheus, monitoring-grafana.
+fullnameOverride: monitoring
+
+defaultRules:
+  create: false
+
+kubeApiServer:
+  enabled: false
+kubelet:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+coreDns:
+  enabled: false
+kubeEtcd:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeProxy:
+  enabled: false
+nodeExporter:
+  enabled: false
+
+# Kept: the state of the pods and of the autoscalers, as series -- how many
+# replicas the HPA of booking asked for, and when.
+kubeStateMetrics:
+  enabled: true
+
+prometheusOperator:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 192Mi
+
+prometheus:
+  prometheusSpec:
+    # The interval of the compose stack, which the dashboards are built for.
+    scrapeInterval: 15s
+    evaluationInterval: 15s
+    retention: 2d
+    # Every ServiceMonitor and PrometheusRule of the cluster, not only those
+    # labelled with this release: the services and deploy/helm/observability
+    # are other releases.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    probeSelectorNilUsesHelmValues: false
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: "1"
+        memory: 768Mi
+
+alertmanager:
+  alertmanagerSpec:
+    # The routing of deploy/observability/alertmanager.yaml, put into this
+    # Secret by deploy/helm/observability.
+    useExistingSecret: true
+    configSecret: alertmanager-barber
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        cpu: 100m
+        memory: 128Mi
+
+grafana:
+  # As in the compose stack: whoever reaches Grafana is its admin, and nobody
+  # logs in to look at a dashboard. Reached through "make kind-grafana", a
+  # port-forward to localhost:3000 -- the address the links of the alerts use.
+  grafana.ini:
+    auth.anonymous:
+      enabled: true
+      org_role: Admin
+    auth:
+      disable_login_form: true
+    analytics:
+      reporting_enabled: false
+      check_for_updates: false
+  defaultDashboardsEnabled: false
+  persistence:
+    enabled: false
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 384Mi
+  sidecar:
+    dashboards:
+      enabled: true
+      # The ConfigMaps of deploy/helm/observability, into the folder their
+      # annotation names.
+      label: grafana_dashboard
+      labelValue: "1"
+      folderAnnotation: grafana_folder
+      provider:
+        foldersFromFilesStructure: true
+        allowUiUpdates: false
+    datasources:
+      enabled: true
+      # The uids are the ones of the compose stack: the dashboards refer to a
+      # data source by uid, and one the chart generated would not match.
+      defaultDatasourceEnabled: true
+      isDefaultDatasource: true
+      name: Prometheus
+      uid: prometheus
+      alertmanager:
+        enabled: true
+        name: Alertmanager
+        uid: alertmanager
+        handleGrafanaManagedAlerts: false
+        implementation: prometheus
+  # Tempo and Loki of deploy/helm/observability, in this namespace under the
+  # same names as in compose, with the same links between them as
+  # deploy/compose/observability/grafana-datasources.yaml.
+  additionalDataSources:
+    - name: Tempo
+      uid: tempo
+      type: tempo
+      access: proxy
+      url: http://tempo:3200
+      jsonData:
+        tracesToLogsV2:
+          datasourceUid: loki
+          spanStartTimeShift: -5m
+          spanEndTimeShift: 5m
+          customQuery: true
+          query: '{service=~".+"} | trace_id=~"0*$${__trace.traceId}"'
+    - name: Loki
+      uid: loki
+      type: loki
+      access: proxy
+      url: http://loki:3100
+      jsonData:
+        derivedFields:
+          - name: trace_id
+            matcherType: label
+            matcherRegex: trace_id
+            datasourceUid: tempo
+            url: "$${__value.raw}"
+            urlDisplayLabel: Open the trace

@@ -1,0 +1,2 @@
+# The values of the upstream chart installed next to this one, not a part of it.
+kube-prometheus-stack.yaml

@@ -1,0 +1,11 @@
+apiVersion: v2
+name: observability
+description: >-
+  What the platform adds to kube-prometheus-stack: Tempo, Loki and Alloy on
+  the images and configuration of the compose stack, and the alerting rules,
+  dashboards and routing of deploy/observability -- the same files compose
+  mounts, linked into files/ rather than copied.
+type: application
+version: 0.1.0
+appVersion: "1"
+kubeVersion: ">=1.30.0-0"

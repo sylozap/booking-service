@@ -1,0 +1,22 @@
+{{- $dashboards := .Files.Glob "files/dashboards/*.json" -}}
+{{- if not $dashboards }}
+{{- fail "files/dashboards has no dashboards: is the link to deploy/observability/dashboards broken?" }}
+{{- end }}
+{{- range $path, $_ := $dashboards }}
+# Picked up by the dashboard sidecar of Grafana by its label, put into the
+# folder its annotation names. The JSON is the file of the repository, as in
+# the compose stack: a dashboard is changed in git, never in the UI.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dashboard-{{ base $path | trimSuffix ".json" }}
+  labels:
+    grafana_dashboard: "1"
+    {{- include "observability.labels" $ | nindent 4 }}
+  annotations:
+    grafana_folder: {{ $.Values.dashboardFolder | quote }}
+data:
+  {{ base $path }}: |-
+    {{- $.Files.Get $path | nindent 4 }}
+---
+{{- end }}

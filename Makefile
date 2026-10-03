@@ -19,12 +19,21 @@ OBSERVABILITY_DIR := deploy/observability
 # the version of the node image of kind.
 SERVICE_CHART := deploy/helm/service
 INFRA_CHART := deploy/helm/infra
+OBSERVABILITY_CHART := deploy/helm/observability
 HELM_VALUES := deploy/helm/values
 HELM_SERVICES := api-gateway auth catalog booking notification
 KUBERNETES_VERSION := 1.37.0
-KUBECONFORM := kubeconform -strict -summary -kubernetes-version $(KUBERNETES_VERSION)
+# The ServiceMonitor and the PrometheusRule are resources of the Prometheus
+# Operator, which the schemas of Kubernetes do not know; their schemas come
+# from the community catalog of CRDs.
+CRD_SCHEMAS := https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json
+KUBECONFORM := kubeconform -strict -summary -kubernetes-version $(KUBERNETES_VERSION) \
+	-schema-location default -schema-location '$(CRD_SCHEMAS)'
+# Rendered as in a cluster that has the operator, so the ServiceMonitor is
+# validated too.
+WITH_OPERATOR := --api-versions monitoring.coreos.com/v1/ServiceMonitor
 
-.PHONY: help sync hooks check lint format type test test-unit alerts-check helm-check keys up infra-up infra-down infra-check obs-up obs-down down logs migrate seed kind-up kind-down clean
+.PHONY: help sync hooks check lint format type test test-unit alerts-check helm-check keys up infra-up infra-down infra-check kind-obs-up kind-grafana obs-up obs-down down logs migrate seed kind-up kind-down clean
 
 help: ## Show available commands
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -77,12 +86,18 @@ helm-check: ## Lint the Helm charts and validate what they render for every serv
 			files="-f $(HELM_VALUES)/common.yaml -f $(HELM_VALUES)/$$service.yaml $${overlay:+-f $$overlay}"; \
 			helm lint --strict $(SERVICE_CHART) $$files --set image.tag=check --quiet || exit 1; \
 			helm template $$service $(SERVICE_CHART) --namespace barber $$files --set image.tag=check \
-				| $(KUBECONFORM) - || exit 1; \
+				$(WITH_OPERATOR) | $(KUBECONFORM) - || exit 1; \
 		done; \
 	done
 	@echo "==> infra"
 	@helm lint --strict $(INFRA_CHART) --quiet
 	@helm template infra $(INFRA_CHART) --namespace barber-infra | $(KUBECONFORM) -
+	@# The chart links the shared files of deploy/observability, and helm says
+	@# so about every link; that is the design, not news.
+	@echo "==> observability"
+	@helm lint --strict $(OBSERVABILITY_CHART) --quiet 2> >(grep -v "found symbolic link" >&2)
+	@helm template observability $(OBSERVABILITY_CHART) --namespace observability \
+		2> >(grep -v "found symbolic link" >&2) | $(KUBECONFORM) -
 
 keys: $(SIGNING_KEY) ## Generate the local RS256 signing key of auth, if absent
 
@@ -139,6 +154,13 @@ infra-down: ## Remove the infrastructure from the current cluster, with everythi
 
 infra-check: ## Check in the cluster that every role reaches its own database and no other
 	./scripts/check_db_isolation.sh
+
+kind-obs-up: ## Install Prometheus, Alertmanager, Grafana, Tempo, Loki and Alloy into the current cluster
+	./scripts/obs_up.sh
+
+# localhost:3000, as in the compose stack: the links of the alerts point there.
+kind-grafana: ## Open Grafana of the cluster on http://localhost:3000 (port-forward, Ctrl+C to stop)
+	kubectl port-forward --namespace observability service/monitoring-grafana 3000:80
 
 kind-up: ## Create the kind cluster and install the Helm releases
 	@test -x scripts/kind-up.sh || { echo "scripts/kind-up.sh not found"; exit 1; }
