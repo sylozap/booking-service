@@ -44,6 +44,10 @@ jobs:
       - name: ruff format
         run: uv run ruff format --check .
 
+      # The pre-commit hook of a developer can be skipped; this step cannot.
+      - name: no secrets in the repository
+        run: scripts/check-secrets.sh
+
   types:
     runs-on: ubuntu-latest
     steps:

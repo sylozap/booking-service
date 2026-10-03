@@ -153,6 +153,15 @@ pdb:
   enabled: true
   maxUnavailable: 1
 
+# An Ingress for the service, routing every path of the host to it. On for the
+# gateway alone: the other services are reached through it.
+ingress:
+  enabled: false
+  # The IngressClass of the controller the environment runs; empty means the
+  # default class of the cluster.
+  className: ""
+  host: ""
+
 # Optional resources. Their templates arrive with the tasks that need them.
 serviceMonitor:
   enabled: false

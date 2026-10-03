@@ -37,3 +37,7 @@ resources:
 hpa:
   minReplicas: 1
   maxReplicas: 3
+
+# kind runs Traefik as its Ingress controller (scripts/kind_up.sh).
+ingress:
+  className: traefik

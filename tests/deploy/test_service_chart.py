@@ -664,3 +664,42 @@ def test_every_service_has_a_budget_that_selects_its_pods(
     assert budget["maxUnavailable"] == 1
     assert "minAvailable" not in budget
     assert budget["selector"]["matchLabels"].items() <= labels.items()
+
+
+# --- the way in ------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("service", SERVICES)
+def test_only_the_gateway_is_reachable_from_outside(
+    render_service: Callable[..., list[Manifest]], service: str
+) -> None:
+    ingresses = find(render_service(service, local=True), "Ingress")
+
+    assert len(ingresses) == (1 if service == "api-gateway" else 0)
+
+
+def test_gateway_ingress_sends_every_path_of_the_host_to_the_gateway(
+    render_service: Callable[..., list[Manifest]],
+) -> None:
+    ingress = only(render_service("api-gateway", local=True), "Ingress")
+
+    [rule] = ingress["spec"]["rules"]
+    [path] = rule["http"]["paths"]
+
+    assert ingress["spec"]["ingressClassName"] == "traefik"
+    assert rule["host"] == "barber.local"
+    assert (path["path"], path["pathType"]) == ("/", "Prefix")
+    assert path["backend"]["service"] == {"name": "api-gateway", "port": {"name": "http"}}
+
+
+def test_gateway_behind_the_ingress_trusts_exactly_one_proxy(
+    render_service: Callable[..., list[Manifest]],
+) -> None:
+    data = only(render_service("api-gateway"), "ConfigMap")["data"]
+
+    assert data["TRUSTED_PROXY_HOPS"] == "1"
+
+
+def test_render_fails_when_the_ingress_has_no_host(render: Render) -> None:
+    with pytest.raises(RenderError, match="ingress.host is required"):
+        render({"ingress": {"enabled": True}})

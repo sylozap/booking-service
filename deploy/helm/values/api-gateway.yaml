@@ -19,6 +19,15 @@ env:
   CATALOG_URL: http://catalog:8002
   BOOKING_URL: http://booking:8003
   NOTIFICATION_URL: http://notification:8004
+  # The Ingress controller is the one proxy in front of the gateway: the
+  # address of the caller is the last one it appends to X-Forwarded-For.
+  # Anything to the left of it came from the client and is not trusted.
+  TRUSTED_PROXY_HOPS: "1"
+
+# The one way into the platform from outside the cluster.
+ingress:
+  enabled: true
+  host: barber.local
 
 # Nothing secret: no database, and Redis has no password in this cluster.
 secret:
