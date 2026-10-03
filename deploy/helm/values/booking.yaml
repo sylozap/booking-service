@@ -7,6 +7,13 @@ image:
 port: 8003
 replicas: 2
 
+# The availability query is the hot path of the platform and the heaviest in
+# CPU (docs/12-testing.md: 80 % of the traffic).
+hpa:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 5
+
 env:
   CATALOG_URL: http://catalog:8002
   AUTH_URL: http://auth:8001

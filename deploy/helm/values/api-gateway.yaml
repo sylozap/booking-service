@@ -7,6 +7,13 @@ image:
 port: 8000
 replicas: 2
 
+# Every request of the platform passes through the gateway, so its load is the
+# load of the platform.
+hpa:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 5
+
 env:
   AUTH_URL: http://auth:8001
   CATALOG_URL: http://catalog:8002

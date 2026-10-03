@@ -134,10 +134,25 @@ nodeSelector: {}
 tolerations: []
 affinity: {}
 
-# Optional resources. Their templates arrive with the tasks that need them.
+# Replicas by CPU, for the services whose load comes and goes with traffic.
+# When on, "replicas" above is not written into the Deployment: the
+# autoscaler owns the count, and an upgrade must not reset what it decided.
 hpa:
   enabled: false
+  minReplicas: 2
+  maxReplicas: 5
+  # Of the CPU request. Below 100 so that a new pod has time to start before
+  # the ones running are at their limit.
+  targetCPUUtilizationPercentage: 70
+  # The default of Kubernetes, written out: how long the load has to stay low
+  # before pods are removed.
+  scaleDownStabilizationSeconds: 300
+
+# Every service is stateless, so every one gets a disruption budget.
 pdb:
-  enabled: false
+  enabled: true
+  maxUnavailable: 1
+
+# Optional resources. Their templates arrive with the tasks that need them.
 serviceMonitor:
   enabled: false

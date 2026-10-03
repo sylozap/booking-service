@@ -13,14 +13,27 @@ replicas: 1
 
 env:
   ENVIRONMENT: local
-  LOG_LEVEL: DEBUG
+  # INFO, not the DEBUG of compose: at DEBUG the Kafka client logs every fetch,
+  # a pod holding partitions spends a quarter of a CPU rendering and shipping
+  # those lines, and the autoscaler takes it for load and never scales down.
+  LOG_LEVEL: INFO
 
 # Limits stay above the steady state of a Python service with its pools;
 # argon2id of auth is the one that needs the headroom.
+# The CPU request is what the autoscalers count against: 100m sits above the
+# idle of a service with its relay, consumers and schedulers polling, so
+# "70 % of the request" means traffic, not the background loops. With 50m an
+# idle booking hovered near the target and never went below two pods.
 resources:
   requests:
-    cpu: 50m
+    cpu: 100m
     memory: 128Mi
   limits:
     cpu: 500m
     memory: 384Mi
+
+# The two autoscaled services start from one pod as well and may grow to
+# three: enough to watch the autoscaler work, few enough to fit.
+hpa:
+  minReplicas: 1
+  maxReplicas: 3

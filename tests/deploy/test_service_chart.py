@@ -116,12 +116,18 @@ def secret_variables(container: Manifest) -> list[Manifest]:
 # --- what a release consists of ----------------------------------------------
 
 
-def test_release_renders_deployment_service_configmap_and_account(render: Render) -> None:
+def test_release_renders_deployment_service_configmap_account_and_budget(render: Render) -> None:
     manifests = render()
 
     kinds = sorted(manifest["kind"] for manifest in manifests)
 
-    assert kinds == ["ConfigMap", "Deployment", "Service", "ServiceAccount"]
+    assert kinds == [
+        "ConfigMap",
+        "Deployment",
+        "PodDisruptionBudget",
+        "Service",
+        "ServiceAccount",
+    ]
     assert {manifest["metadata"]["name"] for manifest in manifests} == {"booking"}
 
 
@@ -290,6 +296,8 @@ VALUES = ROOT / "deploy/helm/values"
 COMMON = VALUES / "common.yaml"
 LOCAL = VALUES / "local.yaml"
 SERVICES = ("api-gateway", "auth", "catalog", "booking", "notification")
+# The services whose load follows the traffic (docs/10-infrastructure.md).
+AUTOSCALED = ("api-gateway", "booking")
 TAG = "0123abc"
 
 SETTINGS = {
@@ -348,6 +356,19 @@ def render_service(tmp_path: Path) -> Callable[..., list[Manifest]]:
     return _render
 
 
+def replica_range(manifests: list[Manifest]) -> tuple[int, int]:
+    """The fewest and the most pods the release may run.
+
+    The autoscaler decides when there is one, the Deployment otherwise.
+    """
+    autoscalers = find(manifests, "HorizontalPodAutoscaler")
+    if autoscalers:
+        spec = only(manifests, "HorizontalPodAutoscaler")["spec"]
+        return spec["minReplicas"], spec["maxReplicas"]
+    replicas: int = only(manifests, "Deployment")["spec"]["replicas"]
+    return replicas, replicas
+
+
 def values_of(service: str) -> dict[str, Any]:
     loaded: dict[str, Any] = yaml.safe_load((VALUES / f"{service}.yaml").read_text())
     return loaded
@@ -363,7 +384,7 @@ def test_service_renders_from_its_values_alone(
 
     assert deployment["metadata"]["name"] == service
     assert container["image"] == f"ghcr.io/sylozap/booking-service/{service}:{TAG}"
-    assert deployment["spec"]["replicas"] == 2
+    assert replica_range(render_service(service)) == ((2, 5) if service in AUTOSCALED else (2, 2))
     assert container["resources"]["limits"].keys() >= {"cpu", "memory"}
 
 
@@ -429,7 +450,9 @@ def test_local_runs_one_replica_of_the_image_built_for_compose(
 
     container = container_of(deployment)
 
-    assert deployment["spec"]["replicas"] == 1
+    assert replica_range(render_service(service, local=True)) == (
+        (1, 3) if service in AUTOSCALED else (1, 1)
+    )
     assert container["image"] == f"barber/{service}:local"
     assert container["imagePullPolicy"] == "Never"
     assert container["resources"]["limits"] == {"cpu": "500m", "memory": "384Mi"}
@@ -584,3 +607,60 @@ def load_settings_default(service: str, field: str) -> float:
     default = settings_of(service).model_fields[field].default
     assert isinstance(default, int | float)
     return float(default)
+
+
+# --- autoscaling and disruption budgets ---------------------------------------
+
+
+@pytest.mark.parametrize("service", SERVICES)
+def test_only_the_gateway_and_booking_are_autoscaled(
+    render_service: Callable[..., list[Manifest]], service: str
+) -> None:
+    autoscalers = find(render_service(service), "HorizontalPodAutoscaler")
+
+    assert len(autoscalers) == (1 if service in AUTOSCALED else 0)
+
+
+@pytest.mark.parametrize("service", AUTOSCALED)
+def test_autoscaler_scales_the_deployment_by_cpu(
+    render_service: Callable[..., list[Manifest]], service: str
+) -> None:
+    spec = only(render_service(service), "HorizontalPodAutoscaler")["spec"]
+    [metric] = spec["metrics"]
+
+    assert spec["scaleTargetRef"] == {
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "name": service,
+    }
+    assert metric["resource"]["name"] == "cpu"
+    assert metric["resource"]["target"] == {"type": "Utilization", "averageUtilization": 70}
+
+
+@pytest.mark.parametrize("service", AUTOSCALED)
+def test_autoscaled_deployment_leaves_the_replica_count_to_the_autoscaler(
+    render_service: Callable[..., list[Manifest]], service: str
+) -> None:
+    deployment = only(render_service(service), "Deployment")
+
+    assert "replicas" not in deployment["spec"]
+
+
+def test_render_fails_when_the_autoscaler_minimum_is_above_its_maximum(render: Render) -> None:
+    with pytest.raises(RenderError, match="minReplicas is above"):
+        render({"hpa": {"enabled": True, "minReplicas": 4, "maxReplicas": 2}})
+
+
+@pytest.mark.parametrize("service", SERVICES)
+def test_every_service_has_a_budget_that_selects_its_pods(
+    render_service: Callable[..., list[Manifest]], service: str
+) -> None:
+    manifests = render_service(service, local=True)
+
+    budget = only(manifests, "PodDisruptionBudget")["spec"]
+    labels = only(manifests, "Deployment")["spec"]["template"]["metadata"]["labels"]
+
+    # maxUnavailable, so that a single replica in kind still lets a node drain.
+    assert budget["maxUnavailable"] == 1
+    assert "minAvailable" not in budget
+    assert budget["selector"]["matchLabels"].items() <= labels.items()
