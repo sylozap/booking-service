@@ -703,3 +703,126 @@ def test_gateway_behind_the_ingress_trusts_exactly_one_proxy(
 def test_render_fails_when_the_ingress_has_no_host(render: Render) -> None:
     with pytest.raises(RenderError, match="ingress.host is required"):
         render({"ingress": {"enabled": True}})
+
+
+# --- the seed Job ----------------------------------------------------------------
+
+SEED_SCRIPT = ROOT / "scripts/seed.py"
+
+
+@pytest.fixture
+def render_seed(tmp_path: Path) -> Callable[[], list[Manifest]]:
+    """The gateway of kind with the seed on, as scripts/kind_up.sh installs it."""
+
+    def _render() -> list[Manifest]:
+        extra = tmp_path / "seed.yaml"
+        extra.write_text(
+            yaml.safe_dump(
+                {
+                    "image": {"tag": TAG},
+                    "seed": {"enabled": True, "script": SEED_SCRIPT.read_text()},
+                }
+            ),
+            encoding="utf-8",
+        )
+        files = [COMMON, VALUES / "api-gateway.yaml", LOCAL, extra]
+        return render_chart(CHART, "api-gateway", files)
+
+    return _render
+
+
+def seed_job(manifests: list[Manifest]) -> Manifest:
+    [job] = [m for m in find(manifests, "Job") if m["metadata"]["name"] == "api-gateway-seed"]
+    return job
+
+
+def seed_configmap(manifests: list[Manifest]) -> Manifest:
+    [script] = [
+        m for m in find(manifests, "ConfigMap") if m["metadata"]["name"] == "api-gateway-seed"
+    ]
+    return script
+
+
+@pytest.mark.parametrize("service", SERVICES)
+def test_no_seed_unless_asked_for(
+    render_service: Callable[..., list[Manifest]], service: str
+) -> None:
+    manifests = render_service(service, local=True)
+
+    names = {m["metadata"]["name"] for m in manifests}
+
+    assert f"{service}-seed" not in names
+
+
+def test_seed_runs_after_the_release_and_on_every_upgrade(
+    render_seed: Callable[[], list[Manifest]],
+) -> None:
+    manifests = render_seed()
+
+    job = seed_job(manifests)
+    configmap = seed_configmap(manifests)
+
+    for hooked in (job, configmap):
+        annotations = hooked["metadata"]["annotations"]
+        assert annotations["helm.sh/hook"] == "post-install,post-upgrade"
+        assert annotations["helm.sh/hook-delete-policy"] == "before-hook-creation"
+    # The script exists before the Job that mounts it.
+    assert int(configmap["metadata"]["annotations"]["helm.sh/hook-weight"]) < int(
+        job["metadata"]["annotations"]["helm.sh/hook-weight"]
+    )
+
+
+def test_seed_runs_the_script_of_the_repository_in_the_gateway_image(
+    render_seed: Callable[[], list[Manifest]],
+) -> None:
+    manifests = render_seed()
+
+    job = seed_job(manifests)
+    configmap = seed_configmap(manifests)
+    container = container_of(job)
+
+    assert configmap["data"]["seed.py"] == SEED_SCRIPT.read_text().rstrip("\n")
+    assert container["image"] == container_of(only(manifests, "Deployment"))["image"]
+    assert container["command"] == ["python", "/seed/seed.py"]
+    assert pod_spec(job)["restartPolicy"] == "Never"
+
+
+def test_seed_signs_in_as_the_administrator_auth_creates(
+    render_seed: Callable[[], list[Manifest]],
+) -> None:
+    container = container_of(seed_job(render_seed()))
+
+    references = {
+        variable["name"]: variable["valueFrom"]["secretKeyRef"]
+        for variable in secret_variables(container)
+    }
+    plain = {v["name"]: v["value"] for v in container["env"] if "value" in v}
+    auth_keys = values_of("auth")["secret"]["keys"]
+
+    assert references == {
+        "SEED_ADMIN_EMAIL": {"name": "auth-env", "key": "BOOTSTRAP_ADMIN_EMAIL"},
+        "SEED_ADMIN_PASSWORD": {"name": "auth-env", "key": "BOOTSTRAP_ADMIN_PASSWORD"},
+    }
+    assert {"BOOTSTRAP_ADMIN_EMAIL", "BOOTSTRAP_ADMIN_PASSWORD"} <= set(auth_keys)
+    # Straight to the services: the gateway would rate limit the seed.
+    assert plain == {
+        "SEED_AUTH_URL": "http://auth:8001",
+        "SEED_CATALOG_URL": "http://catalog:8002",
+        "SEED_BOOKING_URL": "http://booking:8003",
+    }
+
+
+def test_service_never_routes_to_the_seed_pod(
+    render_seed: Callable[[], list[Manifest]],
+) -> None:
+    manifests = render_seed()
+
+    selector = only(manifests, "Service")["spec"]["selector"]
+    labels = seed_job(manifests)["spec"]["template"]["metadata"]["labels"]
+
+    assert not selector.items() <= labels.items()
+
+
+def test_render_fails_when_the_seed_has_no_script(render: Render) -> None:
+    with pytest.raises(RenderError, match="seed.script is empty"):
+        render({"seed": {"enabled": True}})

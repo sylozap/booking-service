@@ -191,6 +191,11 @@ services:
       # booking reads the internal endpoint of catalog with a token of its own.
       # A throwaway secret for the local stack, the same one booking sends.
       SERVICE_CLIENTS: '{"booking": {"secret": "booking-local-secret", "scopes": ["catalog:read"]}}'
+      # The first super_admin, created at startup; "make seed" signs in as it.
+      # Throwaway, like every other credential of the local stack.
+      BOOTSTRAP_ADMIN_EMAIL: admin@barber.example
+      BOOTSTRAP_ADMIN_PHONE: "+79990000000"
+      BOOTSTRAP_ADMIN_PASSWORD: admin-local-password-1
     ports:
       - "8001:8001"
     volumes:

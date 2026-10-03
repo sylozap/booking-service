@@ -74,7 +74,8 @@ python_version = "3.12"
 strict = true
 warn_unreachable = true
 plugins = ["pydantic.mypy"]
-mypy_path = ["libs/common/src"]
+# scripts: the tests import scripts/seed.py as the module "seed".
+mypy_path = ["libs/common/src", "scripts"]
 # mypy maps a file to a module by its name, and this layout has the same name
 # more than once: every service has a migrations/env.py and a tests/test_smoke.py.
 # The migrations are excluded outright; the tests of the services are checked
@@ -100,6 +101,8 @@ ignore_missing_imports = true
 # mode derives the module name from the file name, so they collide.
 addopts = "--strict-markers --strict-config --import-mode=importlib"
 testpaths = ["libs", "services", "tests"]
+# The seed is a script, not a package; its tests import it from here.
+pythonpath = ["scripts"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 markers = [

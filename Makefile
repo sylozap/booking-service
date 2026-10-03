@@ -142,9 +142,10 @@ migrate: ## Apply database migrations of every service
 	@test -x scripts/migrate.sh || { echo "scripts/migrate.sh not found"; exit 1; }
 	./scripts/migrate.sh
 
-seed: ## Load demo data into the local environment
-	@test -x scripts/seed.sh || { echo "scripts/seed.sh not found"; exit 1; }
-	./scripts/seed.sh
+# Signs in as the first administrator of docker-compose.yml, whose throwaway
+# password is the default here; SEED_ADMIN_PASSWORD in the environment wins.
+seed: ## Load demo data into the local environment through the API of the services
+	SEED_ADMIN_PASSWORD=$${SEED_ADMIN_PASSWORD:-admin-local-password-1} $(UV) run python scripts/seed.py
 
 infra-up: ## Install PostgreSQL, Redis and Kafka into the current cluster, create the topics
 	./scripts/infra_up.sh

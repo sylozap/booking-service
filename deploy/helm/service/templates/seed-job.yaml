@@ -1,0 +1,102 @@
+{{- if .Values.seed.enabled }}
+{{- $name := include "service.name" . -}}
+{{- $script := required "seed.script is empty: pass --set-file seed.script=scripts/seed.py" .Values.seed.script -}}
+# The demo data (scripts/seed.py), loaded once the release is up. On for the
+# gateway of kind alone, by scripts/kind_up.sh, which installs the gateway
+# last: by then auth, catalog and booking run, and the script waits for them
+# to be ready all the same.
+#
+# The script comes in a ConfigMap from --set-file rather than inside the
+# image: the images ship the services and nothing else, and the script stays
+# one file that also runs on a laptop. The image is the gateway's because it
+# already has what the script imports -- httpx and pydantic-settings.
+#
+# A hook, so it runs on every install and upgrade; the seed changes nothing on
+# a platform that has it already. A failed seed fails the release with its
+# logs kept until the next run.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}-seed
+  labels:
+    {{- include "service.labels" . | nindent 4 }}
+    app.kubernetes.io/component: seed
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation
+data:
+  seed.py: |-
+    {{- $script | nindent 4 }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}-seed
+  labels:
+    {{- include "service.labels" . | nindent 4 }}
+    app.kubernetes.io/component: seed
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "1"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: {{ .Values.seed.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.seed.activeDeadlineSeconds }}
+  template:
+    metadata:
+      # Not the labels of the Deployment: the Service must not route to it.
+      labels:
+        app.kubernetes.io/name: {{ $name }}-seed
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: seed
+        app.kubernetes.io/part-of: barber
+      annotations:
+        checksum/script: {{ $script | sha256sum }}
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: seed
+          image: {{ include "service.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["python", "/seed/seed.py"]
+          env:
+            - name: SEED_AUTH_URL
+              value: {{ .Values.seed.authUrl | quote }}
+            - name: SEED_CATALOG_URL
+              value: {{ .Values.seed.catalogUrl | quote }}
+            - name: SEED_BOOKING_URL
+              value: {{ .Values.seed.bookingUrl | quote }}
+            # The first super_admin, from the Secret auth creates it from.
+            - name: SEED_ADMIN_EMAIL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.seed.adminSecret }}
+                  key: BOOTSTRAP_ADMIN_EMAIL
+            - name: SEED_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.seed.adminSecret }}
+                  key: BOOTSTRAP_ADMIN_PASSWORD
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          resources:
+            {{- include "service.resources" (dict "resources" .Values.seed.resources "owner" (printf "%s seed" $name)) | nindent 12 }}
+          volumeMounts:
+            - name: script
+              mountPath: /seed
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: script
+          configMap:
+            name: {{ $name }}-seed
+        - name: tmp
+          emptyDir:
+            sizeLimit: 16Mi
+{{- end }}

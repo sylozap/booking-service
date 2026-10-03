@@ -44,6 +44,31 @@ secret:
 # auth. Each entry: secretName, key, mountPath.
 secretFiles: []
 
+# The demo data Job (scripts/seed.py), run after an install or upgrade. Off
+# everywhere but the gateway of kind, where scripts/kind_up.sh turns it on.
+seed:
+  enabled: false
+  # The script itself: --set-file seed.script=scripts/seed.py.
+  script: ""
+  # Where the script finds the services: the public API of each, not the
+  # gateway, whose limits are made for people (see the docstring of seed.py).
+  authUrl: http://auth:8001
+  catalogUrl: http://catalog:8002
+  bookingUrl: http://booking:8003
+  # The Secret holding BOOTSTRAP_ADMIN_EMAIL and BOOTSTRAP_ADMIN_PASSWORD: the
+  # administrator the script signs in as.
+  adminSecret: auth-env
+  # A seed that fails twice has found a broken platform, not a flaky network.
+  backoffLimit: 1
+  activeDeadlineSeconds: 900
+  resources:
+    requests:
+      cpu: 50m
+      memory: 96Mi
+    limits:
+      cpu: 500m
+      memory: 192Mi
+
 # Requests and limits are required, for the application and for the migration
 # Job alike: a pod without limits can eat the memory of a node and take the
 # other pods on it down. Rendering fails when a limit is missing.

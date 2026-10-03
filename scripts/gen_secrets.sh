@@ -17,6 +17,8 @@
 # data directory is created again.
 #
 # TELEGRAM_BOT_TOKEN, when set in the environment, replaces the stored token.
+# BOOTSTRAP_ADMIN_EMAIL and BOOTSTRAP_ADMIN_PHONE name the first super_admin;
+# admin@barber.example and +79990000000 when not set.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -84,6 +86,10 @@ apply_secret() {
     echo "secret ${namespace}/${name}"
 }
 
+admin_password() {
+    printf 'admin-%s-1' "$(random_secret)"
+}
+
 dsn() {
     local role=$1 password=$2
     printf 'postgresql+asyncpg://%s:%s@%s:5432/%s' "${role}" "${password}" "${POSTGRES_HOST}" "${role}"
@@ -124,9 +130,17 @@ apply_secret "${INFRA_NAMESPACE}" postgres-credentials \
 # booking, and registered in auth under the same value.
 booking_client_secret=$(kept_or_new "${NAMESPACE}" booking-env SERVICE_CLIENT_SECRET random_secret)
 
+# The first super_admin, created by auth at startup. The seed Job signs in
+# with the same keys of the same Secret. The password has a letter and a digit
+# whatever the random part turns out to be: the policy of auth asks for both.
+admin_password=$(kept_or_new "${NAMESPACE}" auth-env BOOTSTRAP_ADMIN_PASSWORD admin_password)
+
 apply_secret "${NAMESPACE}" auth-env \
     DATABASE_DSN "$(dsn auth "${DB_PASSWORDS[auth]}")" \
-    SERVICE_CLIENTS "{\"booking\": {\"secret\": \"${booking_client_secret}\", \"scopes\": [\"catalog:read\"]}}"
+    SERVICE_CLIENTS "{\"booking\": {\"secret\": \"${booking_client_secret}\", \"scopes\": [\"catalog:read\"]}}" \
+    BOOTSTRAP_ADMIN_EMAIL "${BOOTSTRAP_ADMIN_EMAIL:-admin@barber.example}" \
+    BOOTSTRAP_ADMIN_PHONE "${BOOTSTRAP_ADMIN_PHONE:-+79990000000}" \
+    BOOTSTRAP_ADMIN_PASSWORD "${admin_password}"
 
 private_key=$(kept_or_new "${NAMESPACE}" auth-signing-key private.pem signing_key)
 apply_secret "${NAMESPACE}" auth-signing-key private.pem "${private_key}"

@@ -12,11 +12,16 @@ env:
   JWT_PRIVATE_KEY_PATH: /run/secrets/auth-signing-key.pem
 
 # SERVICE_CLIENTS: the m2m clients and their secrets, as JSON.
+# BOOTSTRAP_ADMIN_*: the first super_admin, created at startup -- the address
+# is personal data and the password a credential, so all three are secret.
 secret:
   enabled: true
   keys:
     - DATABASE_DSN
     - SERVICE_CLIENTS
+    - BOOTSTRAP_ADMIN_EMAIL
+    - BOOTSTRAP_ADMIN_PHONE
+    - BOOTSTRAP_ADMIN_PASSWORD
 
 secretFiles:
   - secretName: auth-signing-key

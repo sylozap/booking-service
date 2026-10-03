@@ -15,6 +15,7 @@ from barber_auth.adapters.database_keys import DatabaseKeys
 from barber_auth.adapters.rsa_signer import RsaTokenSigner
 from barber_auth.api.v1 import jwks, service_tokens
 from barber_auth.api.v1.router import router
+from barber_auth.services.bootstrap import EnsureBootstrapAdmin
 from barber_auth.services.keys import RegisterSigningKey
 from barber_auth.services.service_tokens import RegisterServiceClients
 from barber_auth.settings import ALEMBIC_INI, AuthSettings
@@ -59,6 +60,17 @@ def create_application(settings: AuthSettings | None = None) -> FastAPI:
                 session=session,
                 hasher=app.state.password_hasher,
                 clients=resolved.service_clients,
+            ).execute()
+
+        # The first super_admin, the one account the API cannot create. A bare
+        # session: the scenario opens its own transactions, so that argon2
+        # runs outside them and a lost race with another replica is retried.
+        async with database.session_factory() as session:
+            await EnsureBootstrapAdmin(
+                session=session,
+                hasher=app.state.password_hasher,
+                admin=resolved.bootstrap_admin(),
+                password_min_length=resolved.password_min_length,
             ).execute()
 
         # auth verifies its own tokens against signing_keys directly rather

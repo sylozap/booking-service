@@ -24,7 +24,9 @@ import pytest
 import yaml
 
 from barber_auth.adapters.rsa_signer import RsaTokenSigner
-from barber_auth.settings import ServiceClientConfig
+from barber_auth.domain.contacts import normalize_email, normalize_phone
+from barber_auth.domain.passwords import check_password_policy
+from barber_auth.settings import BootstrapAdminConfig, ServiceClientConfig
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts/gen_secrets.sh"
@@ -257,6 +259,20 @@ def test_signing_key_is_one_auth_signs_with(generated: FakeCluster) -> None:
     assert signer.kid
 
 
+def test_first_administrator_is_one_auth_accepts(generated: FakeCluster) -> None:
+    secret = generated.secrets()[("barber", "auth-env")]
+
+    admin = BootstrapAdminConfig(
+        email=secret["BOOTSTRAP_ADMIN_EMAIL"],
+        phone=secret["BOOTSTRAP_ADMIN_PHONE"],
+        password=secret["BOOTSTRAP_ADMIN_PASSWORD"],
+    )
+
+    normalize_email(admin.email)
+    normalize_phone(admin.phone)
+    check_password_policy(admin.password.get_secret_value())
+
+
 def test_telegram_token_is_empty_without_a_bot(generated: FakeCluster) -> None:
     token = generated.secrets()[("barber", "notification-env")]["TELEGRAM_BOT_TOKEN"]
 
@@ -283,6 +299,10 @@ def test_second_run_keeps_every_value(fresh_cluster: FakeCluster) -> None:
     assert generated_values(fresh_cluster.secrets()) == first
 
 
+# Values the script is told rather than makes up: rotation keeps them.
+CONFIGURED = {"BOOTSTRAP_ADMIN_EMAIL", "BOOTSTRAP_ADMIN_PHONE", "TELEGRAM_BOT_TOKEN"}
+
+
 def test_rotate_replaces_every_generated_value(fresh_cluster: FakeCluster) -> None:
     fresh_cluster.run()
     first = generated_values(fresh_cluster.secrets())
@@ -290,7 +310,9 @@ def test_rotate_replaces_every_generated_value(fresh_cluster: FakeCluster) -> No
     fresh_cluster.run("--rotate")
 
     second = generated_values(fresh_cluster.secrets())
-    unchanged = {key for key, value in first.items() if value and second[key] == value}
+    unchanged = {
+        key for key, value in first.items() if key[2] not in CONFIGURED and second[key] == value
+    }
     assert unchanged == set()
 
 
@@ -337,3 +359,29 @@ def test_nothing_is_written_into_the_repository(fresh_cluster: FakeCluster) -> N
     fresh_cluster.run()
 
     assert repository_files() == before
+
+
+def test_the_seed_job_reads_only_generated_keys(generated: FakeCluster) -> None:
+    secrets = generated.secrets()
+    script = ROOT / "scripts/seed.py"
+
+    read = secrets_read_by(
+        render(
+            SERVICE_CHART,
+            "api-gateway",
+            "barber",
+            "-f",
+            str(VALUES / "common.yaml"),
+            "-f",
+            str(VALUES / "api-gateway.yaml"),
+            "-f",
+            str(VALUES / "local.yaml"),
+            "--set",
+            "seed.enabled=true",
+            "--set-file",
+            f"seed.script={script}",
+        )
+    )
+
+    assert read
+    assert {(name, key) for name, key in read if key not in secrets[("barber", name)]} == set()
