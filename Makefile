@@ -163,13 +163,15 @@ kind-obs-up: ## Install Prometheus, Alertmanager, Grafana, Tempo, Loki and Alloy
 kind-grafana: ## Open Grafana of the cluster on http://localhost:3000 (port-forward, Ctrl+C to stop)
 	kubectl port-forward --namespace observability service/monitoring-grafana 3000:80
 
-kind-up: ## Create the kind cluster and install the Helm releases
-	@test -x scripts/kind-up.sh || { echo "scripts/kind-up.sh not found"; exit 1; }
-	./scripts/kind-up.sh
+# OBSERVABILITY=1 adds Prometheus, Grafana, Tempo, Loki and Alloy: about a
+# gigabyte more (README, "Kubernetes в kind"), which a machine with 8 GB lacks.
+OBSERVABILITY ?= 0
 
-kind-down: ## Delete the kind cluster
-	@test -x scripts/kind-down.sh || { echo "scripts/kind-down.sh not found"; exit 1; }
-	./scripts/kind-down.sh
+kind-up: ## The whole platform in kind, seeded; OBSERVABILITY=1 to add metrics, traces and logs
+	OBSERVABILITY=$(OBSERVABILITY) ./scripts/kind_up.sh
+
+kind-down: ## Delete the kind cluster with everything in it
+	kind delete cluster --name barber
 
 clean: ## Remove build and test artefacts
 	find . -type d -name __pycache__ -prune -exec rm -rf {} +

@@ -1,0 +1,38 @@
+# The kind cluster of the platform: scripts/kind_up.sh, "make kind-up".
+#
+# One node. Every namespace fits on it on a machine with 16 GB, and a second
+# node would only double the memory the system pods take.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: barber
+nodes:
+  - role: control-plane
+    # The Kubernetes the manifests are validated against (KUBERNETES_VERSION
+    # of the Makefile), pinned by digest as the release notes of kind ask.
+    image: kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
+    # etcd in memory: /tmp of a kind node is a tmpfs. On the disk of WSL or
+    # of a laptop an etcd write takes hundreds of milliseconds, the leases of
+    # the controller manager and the scheduler expire, and both restart in a
+    # loop while helm times out talking to the API. The stand keeps nothing
+    # across a restart anyway; a cluster whose Docker restarted is rebuilt
+    # with "make kind-down kind-up".
+    kubeadmConfigPatches:
+      - |
+        kind: ClusterConfiguration
+        etcd:
+          local:
+            dataDir: /tmp/etcd
+    # Where the Ingress controller runs: deploy/kind/traefik.yaml selects it.
+    labels:
+      ingress-ready: "true"
+    # barber.local reaches the cluster on the ports of the host, and only
+    # from the host itself.
+    extraPortMappings:
+      - containerPort: 80
+        hostPort: 80
+        listenAddress: 127.0.0.1
+        protocol: TCP
+      - containerPort: 443
+        hostPort: 443
+        listenAddress: 127.0.0.1
+        protocol: TCP

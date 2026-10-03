@@ -54,6 +54,46 @@ notification `8004`. Исходники смонтированы в контей
 Миграции применяются одноразовыми контейнерами `<service>-migrate` при подъёме
 стенда; вручную — `make migrate`.
 
+## Kubernetes в kind
+
+```bash
+make kind-up                  # кластер, Traefik, infra, пять сервисов, демо-данные
+make kind-up OBSERVABILITY=1  # то же плюс Prometheus, Grafana, Tempo, Loki, Alloy
+make kind-grafana             # Grafana кластера на http://localhost:3000
+make kind-down                # удалить кластер
+```
+
+Нужны Docker, `kind` 0.33, `kubectl`, `helm` 3.22, `uv`. Для браузера —
+строка `127.0.0.1 barber.local` в `/etc/hosts`; без неё:
+
+```bash
+curl --resolve barber.local:80:127.0.0.1 http://barber.local/api/v1/salons
+```
+
+Повторный `make kind-up` безопасен: недостающее создаётся, существующее
+остаётся, пересобранные образы выкатываются. Секреты генерируются прямо в кластер
+(`scripts/gen_secrets.sh`), в файлы не пишутся. Демо-данные — Job `api-gateway-seed`
+(`scripts/seed.py`); на compose-стенде то же самое — `make seed`.
+
+**Прогон 03.10.2026** (WSL2, 12 ядер, 16 ГБ для WSL, Docker 29, kind 0.33,
+Kubernetes 1.37, `OBSERVABILITY=1`):
+
+| | Время |
+|---|---|
+| С нуля, на пустом кэше образов в узле | 28 мин 20 с |
+| из них: кластер · Traefik и metrics-server · сборка и загрузка образов | 1 мин 15 с · 1 мин 45 с · 6 мин 20 с |
+| из них: секреты и infra · наблюдаемость · пять сервисов и seed | 6 мин · 8 мин 20 с · 4 мин 40 с |
+| Повторный запуск на живом кластере | 13 мин 40 с |
+
+Почти всё время — скачивание образов внутрь узла (Kafka, kube-prometheus-stack)
+и их загрузка `kind load`. Узел `kind` со всеми тремя namespace после seed
+занимает 4,7 ГБ памяти; без `OBSERVABILITY=1` — примерно на 1 ГБ меньше.
+Комфортно — от 16 ГБ на машине; на 8 ГБ — без наблюдаемости.
+
+etcd узла держит данные в памяти (на диске WSL записи шли по 150–450 мс,
+и control plane перезапускался): после перезапуска Docker кластер
+пересоздаётся — `make kind-down kind-up`.
+
 ## Наблюдаемость
 
 ```bash

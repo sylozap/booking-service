@@ -1,0 +1,52 @@
+# Traefik as the Ingress controller of kind (scripts/kind_up.sh). It listens
+# on ports 80 and 443 of the node, which deploy/kind/cluster.yaml maps to the
+# host: kind has no load balancer to put in front of a Service.
+#
+# Traefik rather than ingress-nginx: the latter was retired in March 2026 and
+# receives no fixes.
+
+deployment:
+  replicas: 1
+
+# On the node whose ports the host reaches.
+nodeSelector:
+  ingress-ready: "true"
+tolerations:
+  - key: node-role.kubernetes.io/control-plane
+    operator: Exists
+    effect: NoSchedule
+
+ports:
+  web:
+    hostPort: 80
+  websecure:
+    hostPort: 443
+
+# A host port is held by one pod at a time: the new pod of an upgrade can only
+# start once the old one is gone.
+updateStrategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 1
+    maxSurge: 0
+
+# Reached through the host ports, so the Service needs no address of its own
+# outside the cluster. A LoadBalancer -- the default of the chart -- would wait
+# for an address kind never gives, and "helm --wait" with it.
+service:
+  spec:
+    type: ClusterIP
+
+# The class the gateway's Ingress names (deploy/helm/values/local.yaml).
+ingressClass:
+  enabled: true
+  isDefaultClass: true
+  name: traefik
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 192Mi
