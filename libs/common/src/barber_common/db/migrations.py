@@ -13,7 +13,7 @@ from pathlib import Path
 import sqlalchemy as sa
 from alembic.config import Config
 from alembic.migration import MigrationContext
-from alembic.op import create_index, create_table, drop_index, drop_table
+from alembic.op import add_column, create_index, create_table, drop_column, drop_index, drop_table
 from alembic.script import ScriptDirectory
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.dialects.postgresql import JSONB
@@ -25,11 +25,13 @@ from barber_common.logging import get_logger
 __all__ = [
     "MigrationSettings",
     "SchemaVersionMismatch",
+    "add_outbox_traceparent",
     "check_schema_is_current",
     "create_idempotency_keys",
     "create_shared_tables",
     "current_revisions",
     "drop_idempotency_keys",
+    "drop_outbox_traceparent",
     "drop_shared_tables",
     "head_revisions",
     "load_config",
@@ -115,6 +117,20 @@ def create_shared_tables() -> None:
         # has to see the event once.
         sa.PrimaryKeyConstraint("event_id", "consumer_group", name="pk_processed_events"),
     )
+
+
+def add_outbox_traceparent() -> None:
+    """Add ``outbox.traceparent``: the trace an event was written in.
+
+    Nullable for good: an event written while tracing is off has no trace, and
+    the rows written before the column existed keep none.
+    """
+    add_column("outbox", sa.Column("traceparent", sa.String(length=128), nullable=True))
+
+
+def drop_outbox_traceparent() -> None:
+    """Undo :func:`add_outbox_traceparent`."""
+    drop_column("outbox", "traceparent")
 
 
 def create_idempotency_keys() -> None:

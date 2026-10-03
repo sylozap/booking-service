@@ -17,6 +17,7 @@ happened, so the manual review has the payload and the reason in one place.
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from types import TracebackType
@@ -28,7 +29,14 @@ from barber_common.kafka.producer import MessageHeaders
 from barber_common.logging import get_logger
 from barber_common.metrics import counter
 
-__all__ = ["DLQ_TOPIC_SUFFIX", "DeadLetter", "DeadLetterPublisher", "dlq_topic_of"]
+__all__ = [
+    "DEAD_LETTER_REASONS",
+    "DLQ_TOPIC_SUFFIX",
+    "DeadLetter",
+    "DeadLetterPublisher",
+    "dlq_topic_of",
+    "start_dead_letter_counts",
+]
 
 DLQ_TOPIC_SUFFIX = ".dlq"
 
@@ -41,6 +49,22 @@ DLQ_MESSAGES = counter(
     "Messages moved to a dead letter topic",
     labelnames=("topic", "reason"),
 )
+
+
+# The values of the "reason" label: a fixed set, as a label must be.
+DEAD_LETTER_REASONS = ("invalid_message", "handler_failed")
+
+
+def start_dead_letter_counts(topics: Sequence[str]) -> None:
+    """Publish the counter of every topic at zero before anything fails.
+
+    increase() needs a sample before the growth: a series that appears already
+    at one has no growth to show, and the first dead letter of a process would
+    pass by the alert unnoticed.
+    """
+    for topic in topics:
+        for reason in DEAD_LETTER_REASONS:
+            DLQ_MESSAGES.labels(topic=topic, reason=reason)
 
 
 def dlq_topic_of(topic: str) -> str:

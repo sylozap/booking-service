@@ -1,0 +1,11 @@
+# Layered over the file of a service when the observability namespace runs
+# (scripts/obs_up.sh, "make kind-up OBSERVABILITY=1"), the cluster's
+# counterpart of deploy/compose/docker-compose.obs.yml.
+#
+# Tracing is turned on only together with Tempo: without it the services would
+# spend their time failing to export. Metrics need nothing here -- the
+# ServiceMonitor appears by itself once the operator is in the cluster.
+
+env:
+  OTLP_ENABLED: "true"
+  OTLP_ENDPOINT: http://tempo.observability.svc.cluster.local:4317

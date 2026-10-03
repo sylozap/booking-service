@@ -13,17 +13,17 @@ from uuid import UUID
 
 from aiokafka import AIOKafkaProducer
 from opentelemetry import trace
+from opentelemetry.context import Context
 
 from barber_common.events.envelope import EventEnvelope
 from barber_common.logging import get_logger
-from barber_common.tracing import inject_trace_context
+from barber_common.tracing import TRACEPARENT_HEADER, inject_trace_context, links_to
 
 __all__ = ["EventProducer", "MessageHeaders"]
 
 MessageHeaders = list[tuple[str, bytes]]
 
 _logger = get_logger(__name__)
-_tracer = trace.get_tracer(__name__)
 
 
 class EventProducer:
@@ -82,20 +82,29 @@ class EventProducer:
         topic: str,
         aggregate_id: UUID | str,
         envelope: EventEnvelope[PayloadT],
+        traceparent: str | None = None,
     ) -> None:
         """Send one event and wait for the brokers to acknowledge it.
 
         Waiting is the point: the relay marks the row as published only after
         this returns, so a broker that is down leaves the row for the next pass.
+
+        ``traceparent`` is the context the event was written in, as the outbox
+        stored it. The message carries that context rather than the one of the
+        publish, so the consumer continues the trace of the write. The publish
+        span is then a root linked to it, not its child: it happens later, in
+        a pass of the relay that serves many requests and belongs to none.
         """
-        # The span is what puts a traceparent in the headers: without one the
-        # W3C propagator has nothing to write, and the trace would restart on
-        # the consumer instead of continuing through the broker.
-        with _tracer.start_as_current_span(
+        # An empty context makes a root; None means "the current span".
+        root = None if traceparent is None else Context()
+        with trace.get_tracer(__name__).start_as_current_span(
             f"publish {topic}",
+            context=root,
             kind=trace.SpanKind.PRODUCER,
+            links=links_to(traceparent),
             attributes={
                 "messaging.system": "kafka",
+                "messaging.operation.type": "send",
                 "messaging.destination.name": topic,
                 "messaging.message.id": str(envelope.event_id),
             },
@@ -104,7 +113,7 @@ class EventProducer:
                 topic,
                 key=str(aggregate_id).encode("utf-8"),
                 value=envelope.model_dump_json().encode("utf-8"),
-                headers=_build_headers(envelope),
+                headers=_build_headers(envelope, traceparent=traceparent),
             )
 
         _logger.info(
@@ -115,10 +124,19 @@ class EventProducer:
         )
 
 
-def _build_headers[PayloadT](envelope: EventEnvelope[PayloadT]) -> MessageHeaders:
-    """Duplicate the routing fields of the envelope into message headers."""
+def _build_headers[PayloadT](
+    envelope: EventEnvelope[PayloadT], *, traceparent: str | None
+) -> MessageHeaders:
+    """Duplicate the routing fields of the envelope into message headers.
+
+    Without a stored context the current span goes in -- the publish span --
+    so the consumer still continues a trace instead of starting one.
+    """
     carrier: dict[str, str] = {}
-    inject_trace_context(carrier)
+    if traceparent is None:
+        inject_trace_context(carrier)
+    else:
+        carrier[TRACEPARENT_HEADER] = traceparent
 
     headers: MessageHeaders = [
         ("event_type", envelope.event_type.encode("utf-8")),

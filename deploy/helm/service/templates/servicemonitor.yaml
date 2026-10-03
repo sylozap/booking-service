@@ -1,0 +1,30 @@
+{{- if and .Values.serviceMonitor.enabled (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1/ServiceMonitor") }}
+# Prometheus finds the service by this object, so a new service is scraped the
+# moment it is installed, with no list of targets to edit anywhere.
+#
+# Rendered only where the Prometheus Operator is: without its CRD the object
+# could not be created, and a cluster without observability (kind on a small
+# machine) would refuse the whole release.
+#
+# The operator labels every target with "service", the name of the Service --
+# the release name, the same value the compose stack sets by hand. "env" is
+# added here. Dashboards and alerts filter on the two, and work unchanged in
+# both places.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "service.name" . }}
+  labels:
+    {{- include "service.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "service.selectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.serviceMonitor.interval }}
+      relabelings:
+        - targetLabel: env
+          replacement: {{ required "env.ENVIRONMENT is required for the env label of the metrics" .Values.env.ENVIRONMENT | quote }}
+{{- end }}

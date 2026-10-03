@@ -102,3 +102,9 @@ async def test_duration_is_observed_without_the_status_label(
 
     assert count is not None
     assert count >= 1
+
+
+async def test_metrics_report_when_the_process_started(client: httpx.AsyncClient) -> None:
+    metrics = (await client.get("/metrics")).text
+
+    assert "process_start_time_seconds" in metrics

@@ -98,3 +98,57 @@ def test_the_settings_never_print_the_key(
     # SecretStr keeps the key out of a log line that dumps the settings.
     assert pem not in repr(settings)
     assert pem not in str(settings)
+
+
+# --- the first administrator --------------------------------------------------
+
+BOOTSTRAP = {
+    "bootstrap_admin_email": "admin@barber.example",
+    "bootstrap_admin_phone": "+79990000001",
+    "bootstrap_admin_password": "admin-password-of-the-stand-7",
+}
+
+
+def test_an_administrator_is_given_by_three_settings(make_settings: SettingsFactory) -> None:
+    settings = make_settings(**BOOTSTRAP)
+
+    admin = settings.bootstrap_admin()
+
+    assert admin is not None
+    assert (admin.email, admin.phone) == ("admin@barber.example", "+79990000001")
+    assert admin.password.get_secret_value() == "admin-password-of-the-stand-7"
+
+
+def test_no_administrator_by_default(make_settings: SettingsFactory) -> None:
+    assert make_settings().bootstrap_admin() is None
+
+
+def test_empty_variables_name_no_administrator(make_settings: SettingsFactory) -> None:
+    settings = make_settings(**dict.fromkeys(BOOTSTRAP, ""))
+
+    assert settings.bootstrap_admin() is None
+
+
+@pytest.mark.parametrize("missing", sorted(BOOTSTRAP))
+def test_an_administrator_described_by_half_refuses_to_start(
+    make_settings: SettingsFactory, missing: str
+) -> None:
+    partial = {key: value for key, value in BOOTSTRAP.items() if key != missing}
+
+    with pytest.raises(ValidationError, match="set together or not at all"):
+        make_settings(**partial)
+
+
+def test_the_password_does_not_show_in_the_settings(make_settings: SettingsFactory) -> None:
+    settings = make_settings(**BOOTSTRAP)
+
+    assert "admin-password-of-the-stand-7" not in repr(settings)
+
+
+def test_an_administrator_the_login_form_would_refuse_refuses_to_start(
+    make_settings: SettingsFactory,
+) -> None:
+    # .local is a reserved name: the address would be stored, and the login
+    # form would refuse it forever after.
+    with pytest.raises(ValidationError, match="bootstrap_admin_email"):
+        make_settings(**{**BOOTSTRAP, "bootstrap_admin_email": "admin@barber.local"})

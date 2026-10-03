@@ -22,8 +22,11 @@ from barber_booking.consumers.master_lifecycle import (
     MASTER_LIFECYCLE_TOPICS,
     MasterLifecycle,
 )
+from barber_booking.domain.identifiers import MasterId
 from barber_booking.models.booking import Booking
 from barber_booking.models.master_settings import MasterSettings
+from barber_booking.services.cascade_cancel import CancelMasterBookings
+from barber_common.db.session import transaction
 from barber_common.events.bookings import BookingEventType
 from barber_common.events.catalog import (
     CATALOG_MASTERS_TOPIC,
@@ -32,12 +35,17 @@ from barber_common.events.catalog import (
 )
 from barber_common.events.envelope import build_envelope
 from barber_common.kafka import EventConsumer, ProcessingResult, RetryPolicy
+from barber_common.metrics import REGISTRY
 from barber_common.outbox.models import OutboxMessage
 
 pytestmark = pytest.mark.integration
 
 MasterSettingsFactory = Callable[..., Awaitable[MasterSettings]]
 BookingFactory = Callable[..., Awaitable[Booking]]
+
+
+class HandlerFailed(RuntimeError):
+    """Raised after the cascade to roll its transaction back."""
 
 
 def deactivated(master_id: UUID, salon_id: UUID) -> tuple[ConsumerRecord[bytes, bytes], UUID]:
@@ -263,6 +271,54 @@ async def test_a_redelivered_deactivation_changes_nothing_and_announces_nothing(
 
     assert (first, second) == (ProcessingResult.OK, ProcessingResult.DUPLICATE)
     assert len(await cancellations(session)) == 1
+
+
+# --- the counter ------------------------------------------------------------
+
+
+def cancelled_by_salon(salon_id: UUID) -> float:
+    value = REGISTRY.get_sample_value(
+        "bookings_closed_total", {"salon": str(salon_id), "status": "cancelled_by_salon"}
+    )
+    return value or 0.0
+
+
+async def test_every_cancellation_of_the_cascade_is_counted_once(
+    consumer: EventConsumer, master: MasterSettings, make_booking: BookingFactory
+) -> None:
+    for day in (1, 2, 3):
+        await make_booking(
+            master_id=master.master_id,
+            salon_id=master.salon_id,
+            start_at=hours_from_now(24 * day),
+        )
+    message, _ = deactivated(master.master_id, master.salon_id)
+
+    await consumer.handle(message)
+    await consumer.handle(message)
+
+    assert cancelled_by_salon(master.salon_id) == 3
+
+
+async def test_a_cascade_that_rolls_back_counts_nothing(
+    session_factory: async_sessionmaker[AsyncSession],
+    master: MasterSettings,
+    make_booking: BookingFactory,
+) -> None:
+    await make_booking(
+        master_id=master.master_id, salon_id=master.salon_id, start_at=hours_from_now(24)
+    )
+
+    with pytest.raises(HandlerFailed):
+        async with session_factory() as session, transaction(session):
+            await CancelMasterBookings(session).execute(
+                master_id=MasterId(master.master_id), cause=uuid4()
+            )
+            # What a retried handler looks like from here: the work is done,
+            # and the transaction it was done in does not commit.
+            raise HandlerFailed
+
+    assert cancelled_by_salon(master.salon_id) == 0
 
 
 # --- the size of the transaction --------------------------------------------

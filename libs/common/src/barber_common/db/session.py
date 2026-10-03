@@ -7,15 +7,16 @@ written inside one transaction.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from starlette.requests import Request
 
 __all__ = [
     "Database",
+    "after_commit",
     "create_session_factory",
     "get_database",
     "get_session",
@@ -53,6 +54,39 @@ async def transaction(session: AsyncSession) -> AsyncIterator[AsyncSession]:
 
     async with session.begin():
         yield session
+
+
+_PENDING_KEY = "barber_after_commit"
+
+
+def after_commit(session: AsyncSession, callback: Callable[[], None]) -> None:
+    """Run ``callback`` once the transaction the session is in commits.
+
+    For what must count only work that happened: a counter moved inside a
+    transaction that then rolls back -- a consumer retrying a handler -- would
+    count the same thing twice. On a rollback the callback is dropped.
+
+    The scenario may not own the transaction it runs in, so "after the block"
+    is not always "after the commit"; this is.
+    """
+    pending: list[Callable[[], None]] | None = session.info.get(_PENDING_KEY)
+    if pending is None:
+        pending = []
+        session.info[_PENDING_KEY] = pending
+        sync_session = session.sync_session
+
+        @event.listens_for(sync_session, "after_commit")
+        def run_pending(_: object) -> None:
+            callbacks = list(pending)
+            pending.clear()
+            for queued in callbacks:
+                queued()
+
+        @event.listens_for(sync_session, "after_rollback")
+        def drop_pending(_: object) -> None:
+            pending.clear()
+
+    pending.append(callback)
 
 
 @asynccontextmanager

@@ -1,0 +1,35 @@
+{{- if .Values.hpa.enabled }}
+{{- $hpa := .Values.hpa -}}
+{{- if gt (int $hpa.minReplicas) (int $hpa.maxReplicas) }}
+{{- fail (printf "%s: hpa.minReplicas is above hpa.maxReplicas" (include "service.name" .)) }}
+{{- end }}
+# Replicas by CPU. Utilization is measured against the CPU request, which the
+# chart insists on, so the target means the same thing in every environment.
+# Needs metrics-server: without it the autoscaler sees nothing and keeps the
+# Deployment at minReplicas.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "service.name" . }}
+  labels:
+    {{- include "service.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "service.name" . }}
+  minReplicas: {{ $hpa.minReplicas }}
+  maxReplicas: {{ $hpa.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ $hpa.targetCPUUtilizationPercentage }}
+  behavior:
+    scaleDown:
+      # Load that dips for a minute is not load that went away: a shorter
+      # window removes pods only to start them again.
+      stabilizationWindowSeconds: {{ $hpa.scaleDownStabilizationSeconds }}
+{{- end }}

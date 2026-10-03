@@ -1,0 +1,47 @@
+# The observability namespace of a cluster, installed by scripts/obs_up.sh
+# into "observability" after kube-prometheus-stack.
+#
+# Local by design, like deploy/helm/infra: one replica of everything and no
+# persistent volumes. Traces and logs live as long as their pod.
+
+# The "env" label of the log streams, as the services of this cluster report
+# it in ENVIRONMENT (deploy/helm/values/local.yaml).
+environment: local
+
+# The namespace whose pods Alloy reads the logs of.
+logsNamespace: barber
+
+# The images of deploy/compose/docker-compose.obs.yml: the cluster and the
+# compose stack run the same software (tests/deploy/test_observability_chart.py).
+tempo:
+  image: grafana/tempo:2.8.2
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+loki:
+  image: grafana/loki:3.5.5
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 384Mi
+
+alloy:
+  image: grafana/alloy:v1.10.2
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+
+# The folder of the dashboards in Grafana, as in the compose stack.
+dashboardFolder: Barber

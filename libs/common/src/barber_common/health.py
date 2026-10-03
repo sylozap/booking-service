@@ -75,9 +75,11 @@ class HealthRegistry:
     def start_draining(self) -> None:
         """Report not ready from now on, while still serving what is in flight.
 
-        Called on SIGTERM before the requests are drained: Kubernetes removes
-        the pod from the endpoints of the Service and from the load balancer
-        only after a readiness probe fails.
+        Called when the shutdown begins. A pod that is being deleted leaves the
+        endpoints of the Service without waiting for this -- Kubernetes removes
+        it as part of the deletion, and the ``preStop`` pause of the chart
+        covers the time that takes. A failed readiness probe is what removes a
+        pod that is shutting down for any other reason.
         """
         self._is_draining = True
 

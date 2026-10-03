@@ -1,0 +1,86 @@
+// Logs of the cluster: stdout of the pods of the platform, read through the
+// Kubernetes API, into Loki. The counterpart of
+// deploy/compose/observability/config.alloy, which reads them from Docker;
+// the labels and the processing are the same, so a query works in both.
+//
+// Only the five services and their migration Jobs, by the labels the service
+// chart puts on them. The labels of a stream are service, env and level;
+// trace_id is structured metadata.
+
+discovery.kubernetes "pods" {
+	role = "pod"
+
+	namespaces {
+		names = [sys.env("LOGS_NAMESPACE")]
+	}
+}
+
+discovery.relabel "services" {
+	targets = discovery.kubernetes.pods.targets
+
+	rule {
+		source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_name"]
+		regex         = "(api-gateway|auth|catalog|booking|notification)(-migrate)?"
+		action        = "keep"
+	}
+
+	// The release name, and "<service>-migrate" for the Job: the names the
+	// compose stack gives the same containers.
+	rule {
+		source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_name"]
+		target_label  = "service"
+	}
+
+	rule {
+		target_label = "env"
+		replacement  = sys.env("ENVIRONMENT")
+	}
+}
+
+loki.source.kubernetes "services" {
+	targets    = discovery.relabel.services.output
+	forward_to = [loki.relabel.services.receiver]
+}
+
+// The source labels every line with "instance" (the pod) and "job" of its
+// own. Neither exists in the compose stack, and "instance" makes a stream per
+// pod: a rollout would multiply the streams of a service.
+loki.relabel "services" {
+	rule {
+		action = "labeldrop"
+		regex  = "instance|job"
+	}
+
+	forward_to = [loki.process.services.receiver]
+}
+
+loki.process "services" {
+	stage.json {
+		expressions = {
+			level     = "level",
+			timestamp = "timestamp",
+			trace_id  = "trace_id",
+		}
+	}
+
+	stage.labels {
+		values = {level = ""}
+	}
+
+	stage.structured_metadata {
+		values = {trace_id = ""}
+	}
+
+	stage.timestamp {
+		source = "timestamp"
+		format = "RFC3339Nano"
+	}
+
+	forward_to = [loki.write.cluster.receiver]
+}
+
+loki.write "cluster" {
+	endpoint {
+		url = "http://loki:3100/loki/api/v1/push"
+	}
+}

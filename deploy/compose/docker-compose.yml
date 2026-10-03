@@ -3,7 +3,8 @@
 # What matters here beyond convenience:
 #
 # * every service gets its own database and its own PostgreSQL role, so a
-#   cross-service query fails locally instead of in the cluster (init.sql);
+#   cross-service query fails locally instead of in the cluster -- by the same
+#   init script the cluster runs (deploy/helm/infra/files/init-databases.sh);
 # * the migrations run as their own one-shot containers, the same shape as the
 #   Helm pre-upgrade Job, and a service starts only after its own migration
 #   finished -- the schema check in the lifespan would otherwise refuse to run;
@@ -43,12 +44,18 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: postgres
+      # The passwords of the four roles the init script creates. Throwaway,
+      # local, and the same as in the DSNs below.
+      AUTH_DB_PASSWORD: auth
+      CATALOG_DB_PASSWORD: catalog
+      BOOKING_DB_PASSWORD: booking
+      NOTIFICATION_DB_PASSWORD: notification
     ports:
       - "5432:5432"
     volumes:
       # Runs once, when the volume is empty. Changing it means `make down`,
       # which removes the volume, and then `make up`.
-      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ../helm/infra/files/init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh:ro
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
@@ -184,6 +191,11 @@ services:
       # booking reads the internal endpoint of catalog with a token of its own.
       # A throwaway secret for the local stack, the same one booking sends.
       SERVICE_CLIENTS: '{"booking": {"secret": "booking-local-secret", "scopes": ["catalog:read"]}}'
+      # The first super_admin, created at startup; "make seed" signs in as it.
+      # Throwaway, like every other credential of the local stack.
+      BOOTSTRAP_ADMIN_EMAIL: admin@barber.example
+      BOOTSTRAP_ADMIN_PHONE: "+79990000000"
+      BOOTSTRAP_ADMIN_PASSWORD: admin-local-password-1
     ports:
       - "8001:8001"
     volumes:

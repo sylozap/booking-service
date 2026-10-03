@@ -1,0 +1,10 @@
+apiVersion: v2
+name: infra
+description: >-
+  PostgreSQL, Redis and Kafka for the platform in a cluster: one replica of
+  each, no persistence. The same images as the compose stack, so the two run
+  the same software.
+type: application
+version: 0.1.0
+appVersion: "1"
+kubeVersion: ">=1.30.0-0"

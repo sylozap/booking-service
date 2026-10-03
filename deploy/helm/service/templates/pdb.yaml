@@ -1,0 +1,19 @@
+{{- if .Values.pdb.enabled }}
+# A voluntary disruption -- a node drained, a cluster upgraded -- takes the
+# pods of this service one at a time.
+#
+# maxUnavailable rather than minAvailable: with one replica, as in kind,
+# "minAvailable: 1" forbids every eviction and a drain waits forever, while
+# "maxUnavailable: 1" lets the pod go and keeps a larger Deployment serving.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "service.name" . }}
+  labels:
+    {{- include "service.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: {{ .Values.pdb.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{- include "service.selectorLabels" . | nindent 6 }}
+{{- end }}

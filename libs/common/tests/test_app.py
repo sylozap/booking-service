@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from collections.abc import AsyncIterator
 
@@ -152,3 +153,32 @@ async def test_service_lifespan_runs_around_the_application(
         assert events == ["started"]
 
     assert events == ["started", "stopped"]
+
+
+async def test_shutdown_reports_how_long_each_phase_took(
+    settings: BaseAppSettings,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from contextlib import asynccontextmanager
+
+    from fastapi import FastAPI
+
+    @asynccontextmanager
+    async def service_lifespan(app: FastAPI) -> AsyncIterator[None]:
+        yield
+        # A consumer finishing the message in hand.
+        await asyncio.sleep(0.2)
+
+    app = create_app(settings, lifespan=service_lifespan)
+
+    async with app.router.lifespan_context(app):
+        capsys.readouterr()
+    records = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.strip()]
+
+    events = [record["event"] for record in records]
+    stopped = records[events.index("service stopped")]
+
+    assert events.index("shutdown started") < events.index("service stopped")
+    assert stopped["background_seconds"] >= 0.2
+    assert stopped["requests_seconds"] >= 0
+    assert stopped["total_seconds"] >= stopped["background_seconds"]

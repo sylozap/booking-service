@@ -10,7 +10,9 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 from sqlalchemy.pool import QueuePool
 
-from barber_common.db import Database, create_engine, transaction, unit_of_work
+from barber_common.db import Database, after_commit, create_engine, transaction, unit_of_work
+from barber_common.db.engine import observe_pool
+from barber_common.metrics import REGISTRY
 
 pytestmark = pytest.mark.integration
 
@@ -88,6 +90,46 @@ async def test_nested_transaction_rolls_back_together_with_the_outer_one(
     assert await count_probes(engine) == 0
 
 
+async def test_after_commit_runs_once_the_outer_transaction_commits(engine: AsyncEngine) -> None:
+    database = Database(engine)
+    ran: list[str] = []
+
+    async with database.unit_of_work() as session:
+        async with transaction(session):
+            after_commit(session, lambda: ran.append("counted"))
+        # The inner block joined the open transaction: nothing committed yet.
+        assert ran == []
+
+    assert ran == ["counted"]
+
+
+async def test_after_commit_is_dropped_on_a_rollback(engine: AsyncEngine) -> None:
+    database = Database(engine)
+    ran: list[str] = []
+
+    with pytest.raises(WorkFailed):
+        async with database.unit_of_work() as session:
+            after_commit(session, lambda: ran.append("counted"))
+            raise WorkFailed
+
+    assert ran == []
+
+
+async def test_after_commit_does_not_carry_over_to_the_next_transaction(
+    engine: AsyncEngine,
+) -> None:
+    database = Database(engine)
+    ran: list[str] = []
+
+    async with database.session_factory() as session:
+        async with transaction(session):
+            after_commit(session, lambda: ran.append("first"))
+        async with transaction(session):
+            after_commit(session, lambda: ran.append("second"))
+
+    assert ran == ["first", "second"]
+
+
 async def test_concurrent_units_of_work_return_every_connection_to_the_pool(
     engine: AsyncEngine,
 ) -> None:
@@ -121,3 +163,28 @@ async def test_check_connection_fails_when_the_database_is_unreachable() -> None
         await database.check_connection()
 
     await engine.dispose()
+
+
+def pool_usage(engine: AsyncEngine) -> float | None:
+    return REGISTRY.get_sample_value(
+        "db_pool_usage_ratio", {"database": engine.url.database or "default"}
+    )
+
+
+async def test_pool_usage_counts_the_connections_held(engine: AsyncEngine) -> None:
+    observe_pool(engine, capacity=4)
+
+    async with engine.connect() as connection:
+        await connection.execute(text("SELECT 1"))
+        held = pool_usage(engine)
+
+    assert held == 0.25
+
+
+async def test_pool_usage_falls_back_when_the_connection_returns(engine: AsyncEngine) -> None:
+    observe_pool(engine, capacity=4)
+
+    async with engine.connect() as connection:
+        await connection.execute(text("SELECT 1"))
+
+    assert pool_usage(engine) == 0.0

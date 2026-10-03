@@ -12,6 +12,9 @@ repos:
       - id: check-merge-conflict
       - id: check-toml
       - id: check-yaml
+        # Helm templates are YAML only after rendering; "make helm-check"
+        # renders them and validates the result instead.
+        exclude: ^deploy/helm/[^/]+/templates/
       - id: end-of-file-fixer
       - id: trailing-whitespace
       - id: mixed-line-ending

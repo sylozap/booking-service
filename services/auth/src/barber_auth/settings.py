@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Self
 
-from pydantic import BaseModel, ConfigDict, SecretStr, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, SecretStr, field_validator, model_validator
 
 from barber_auth.domain.tokens import (
     ACCESS_TOKEN_TTL_MINUTES,
@@ -14,7 +14,7 @@ from barber_auth.domain.tokens import (
 )
 from barber_common.config import BaseAppSettings, ConfigurationError
 
-__all__ = ["ALEMBIC_INI", "AuthSettings", "ServiceClientConfig"]
+__all__ = ["ALEMBIC_INI", "AuthSettings", "BootstrapAdminConfig", "ServiceClientConfig"]
 
 # services/auth/alembic.ini, two directories above the package. The startup
 # check and the migration Job read the same file, so they cannot disagree about
@@ -34,6 +34,16 @@ class ServiceClientConfig(BaseModel):
     # What a token issued to this client is allowed to do. Deliberately not
     # roles: a service is not a person and has no place in a salon.
     scopes: tuple[str, ...] = ()
+
+
+class BootstrapAdminConfig(BaseModel):
+    """The first administrator of the platform, as the environment describes it."""
+
+    model_config = ConfigDict(frozen=True)
+
+    email: EmailStr
+    phone: str
+    password: SecretStr
 
 
 class AuthSettings(BaseAppSettings):
@@ -85,6 +95,63 @@ class AuthSettings(BaseAppSettings):
     # {"booking": {"secret": "...", "scopes": ["catalog:read"]}}
     # Empty by default, in which case the token endpoint refuses everything.
     service_clients: dict[str, ServiceClientConfig] = {}
+
+    # --- the first administrator --------------------------------------------
+    # Only a super_admin creates a salon, and only a super_admin grants that
+    # role, so the first one cannot come from the API. Given here, the account
+    # is created at startup with a confirmed address and the role; on later
+    # starts the role is ensured and nothing else is touched. All three or
+    # none: without them no administrator is created.
+    # EmailStr, as the login form checks it: an address that form refuses --
+    # a reserved name such as .local -- would be an administrator nobody can
+    # sign in as.
+    bootstrap_admin_email: EmailStr | None = None
+    bootstrap_admin_phone: str | None = None
+    bootstrap_admin_password: SecretStr | None = None
+
+    @field_validator(
+        "bootstrap_admin_email", "bootstrap_admin_phone", "bootstrap_admin_password", mode="before"
+    )
+    @classmethod
+    def _blank_bootstrap_is_unset(cls, value: object) -> object:
+        """An empty variable is an absent one, as for the signing key."""
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @model_validator(mode="after")
+    def _bootstrap_admin_is_complete(self) -> Self:
+        """Refuse an administrator described by half.
+
+        An address without a password is an account nobody can sign in to, and
+        a service that quietly skipped it would leave the operator wondering
+        why the platform has no administrator.
+        """
+        given = [
+            self.bootstrap_admin_email is not None,
+            self.bootstrap_admin_phone is not None,
+            self.bootstrap_admin_password is not None,
+        ]
+        if any(given) and not all(given):
+            raise ValueError(
+                "BOOTSTRAP_ADMIN_EMAIL, BOOTSTRAP_ADMIN_PHONE and BOOTSTRAP_ADMIN_PASSWORD "
+                "are set together or not at all"
+            )
+        return self
+
+    def bootstrap_admin(self) -> BootstrapAdminConfig | None:
+        """The first administrator, when the deployment names one."""
+        if (
+            self.bootstrap_admin_email is None
+            or self.bootstrap_admin_phone is None
+            or self.bootstrap_admin_password is None
+        ):
+            return None
+        return BootstrapAdminConfig(
+            email=self.bootstrap_admin_email,
+            phone=self.bootstrap_admin_phone,
+            password=self.bootstrap_admin_password,
+        )
 
     @field_validator("jwt_private_key_path", "jwt_private_key", mode="before")
     @classmethod

@@ -1,7 +1,127 @@
-# The observability profile, empty for now. It is started with:
+# The observability profile: Prometheus, Alertmanager, Grafana, Tempo, Loki
+# and Alloy.
 #
-#   docker compose -f docker-compose.yml -f docker-compose.obs.yml up -d
+# Started together with the main stack, never instead of it:
 #
-# Everything a service needs on its side is already in place: /metrics is
-# exposed, the logs are JSON on stdout, and OTLP_ENABLED turns the traces on.
-services: {}
+#   make obs-up     # main stack + this file
+#   make obs-down   # this file goes, the services stay
+#
+# It is a separate file because it does not fit next to everything else on a
+# machine with 8 GB of memory (docs/13-risks.md); "make up" runs without it.
+# Every container has a memory ceiling for the same reason.
+#
+# Besides its own containers, the file turns tracing on in the five services:
+# with Tempo absent they would spend their time failing to export.
+#
+# Grafana: http://localhost:3000 (no login), Prometheus: http://localhost:9090,
+# Alertmanager: http://localhost:9093, Alloy: http://localhost:12345.
+
+x-tracing: &tracing
+  OTLP_ENABLED: "true"
+  OTLP_ENDPOINT: http://tempo:4317
+
+x-tracing-service: &tracing-service
+  environment: *tracing
+  depends_on:
+    tempo:
+      condition: service_started
+
+services:
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=2d
+      # POST /-/reload re-reads the configuration without a restart.
+      - --web.enable-lifecycle
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # Shared with the cluster, like the dashboards.
+      - ../observability/alerts/rules.yaml:/etc/prometheus/rules/rules.yaml:ro
+    depends_on:
+      - alertmanager
+    mem_limit: 512m
+    restart: unless-stopped
+
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yaml
+      - --storage.path=/alertmanager
+    ports:
+      - "9093:9093"
+    volumes:
+      - ../observability/alertmanager.yaml:/etc/alertmanager/alertmanager.yaml:ro
+    mem_limit: 128m
+    restart: unless-stopped
+
+  tempo:
+    image: grafana/tempo:2.8.2
+    command: ["-config.file=/etc/tempo.yaml"]
+    ports:
+      - "3200:3200"
+    volumes:
+      - ./observability/tempo.yaml:/etc/tempo.yaml:ro
+    mem_limit: 512m
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:3.5.5
+    command: ["-config.file=/etc/loki/loki.yaml"]
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./observability/loki.yaml:/etc/loki/loki.yaml:ro
+    mem_limit: 384m
+    restart: unless-stopped
+
+  alloy:
+    image: grafana/alloy:v1.10.2
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    ports:
+      - "12345:12345"
+    volumes:
+      - ./observability/config.alloy:/etc/alloy/config.alloy:ro
+      # Read only, and only on a local stack: the socket is root on the host.
+      # In the cluster the logs come from the node, not from Docker.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - loki
+    mem_limit: 256m
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:12.1.1
+    environment:
+      # A local stack: anyone who reaches the port is the admin, and nobody
+      # has to log in to look at a dashboard.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./observability/grafana-datasources.yaml:/etc/grafana/provisioning/datasources/barber.yaml:ro
+      - ./observability/grafana-dashboards.yaml:/etc/grafana/provisioning/dashboards/barber.yaml:ro
+      - ../observability/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+      - alertmanager
+      - tempo
+      - loki
+    mem_limit: 384m
+    restart: unless-stopped
+
+  api-gateway: *tracing-service
+  auth: *tracing-service
+  catalog: *tracing-service
+  booking: *tracing-service
+  notification: *tracing-service

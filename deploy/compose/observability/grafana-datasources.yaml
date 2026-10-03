@@ -1,0 +1,64 @@
+# Data sources of Grafana, provisioned at startup.
+#
+# The uids are fixed: dashboards refer to a data source by uid, and a uid that
+# Grafana generated would differ between this stack and the cluster.
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    jsonData:
+      # The scrape interval: rate() over less than two scrapes draws nothing.
+      timeInterval: 15s
+
+  # "$$" is a literal dollar: Grafana expands environment variables in these
+  # files, and ${__trace.traceId} is a variable of the link, not of the shell.
+
+  - name: Tempo
+    uid: tempo
+    type: tempo
+    access: proxy
+    url: http://tempo:3200
+    jsonData:
+      # From a span to the logs of its whole trace, every service: the question
+      # is what happened to this request, not what one service did. trace_id is
+      # structured metadata in Loki, so the filter needs no parsing of the line.
+      # A regex because Tempo drops the leading zeros of an id, and the logs
+      # keep all 32 digits.
+      tracesToLogsV2:
+        datasourceUid: loki
+        spanStartTimeShift: -5m
+        spanEndTimeShift: 5m
+        customQuery: true
+        query: '{service=~".+"} | trace_id=~"0*$${__trace.traceId}"'
+
+  - name: Loki
+    uid: loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    jsonData:
+      # And back: a record with a trace_id opens its trace in Tempo.
+      derivedFields:
+        - name: trace_id
+          matcherType: label
+          matcherRegex: trace_id
+          datasourceUid: tempo
+          url: "$${__value.raw}"
+          urlDisplayLabel: Open the trace
+
+  # The alerts of Prometheus as Alertmanager holds them: Grafana -> Alerting
+  # shows what fired, what is silenced and what is held back.
+  - name: Alertmanager
+    uid: alertmanager
+    type: alertmanager
+    access: proxy
+    url: http://alertmanager:9093
+    jsonData:
+      implementation: prometheus
+      handleGrafanaManagedAlerts: false

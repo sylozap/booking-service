@@ -1,0 +1,31 @@
+# Routing of the alerts of rules.yaml.
+#
+# Locally every alert ends in one receiver with no integration: it is seen in
+# the Alertmanager UI (http://localhost:9093) and in Grafana -> Alerting, and
+# the routing is exercised all the same. A Telegram or e-mail receiver is a
+# telegram_configs block here and a bot token in a file, when someone is on
+# call to read it.
+
+route:
+  receiver: on-call
+  # One notification per alert and service: an outage of Kafka raises the
+  # outbox of four services at once, and that is four lines, not one per event.
+  group_by: [alertname, service]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    # Accepted and not acted on: reminded of every hour until fixed.
+    - matchers: ['severity="critical"']
+      receiver: on-call
+      repeat_interval: 1h
+
+# A service that is down has no metrics, and its other alerts would only
+# repeat the same fact in other words.
+inhibit_rules:
+  - source_matchers: ['alertname="ServiceDown"']
+    target_matchers: ['alertname!="ServiceDown"']
+    equal: [service]
+
+receivers:
+  - name: on-call

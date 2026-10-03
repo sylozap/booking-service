@@ -1,0 +1,16 @@
+{{- $rules := .Files.Get "files/rules.yaml" | fromYaml -}}
+{{- if not $rules.groups }}
+{{- fail "files/rules.yaml has no groups: is the link to deploy/observability/alerts/rules.yaml broken?" }}
+{{- end }}
+# The alerting rules of deploy/observability/alerts/rules.yaml, the file the
+# compose Prometheus loads, wrapped for the operator. A PrometheusRule holds
+# the same "groups" a rule file does, so nothing is rewritten on the way.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: barber
+  labels:
+    {{- include "observability.labels" . | nindent 4 }}
+spec:
+  groups:
+    {{- toYaml $rules.groups | nindent 4 }}

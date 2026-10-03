@@ -1,0 +1,35 @@
+# notification: contacts, the journal of notifications, delivery to channels.
+
+image:
+  name: notification
+
+port: 8004
+replicas: 2
+
+env:
+  # Empty unless a bot is configured: without one the telegram channel is
+  # written to the log, and the service works all the same.
+  TELEGRAM_BOT_USERNAME: ""
+
+# TELEGRAM_BOT_TOKEN is present and empty when there is no bot.
+secret:
+  enabled: true
+  keys:
+    - DATABASE_DSN
+    - TELEGRAM_BOT_TOKEN
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 192Mi
+  limits:
+    cpu: 500m
+    memory: 384Mi
+
+consumes:
+  - auth.users.v1
+  - booking.bookings.v1
+  - booking.reminders.v1
+
+migrations:
+  enabled: true

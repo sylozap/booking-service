@@ -1,0 +1,41 @@
+# Loki as one process on the local disk. Logs arrive from Alloy
+# (config.alloy), trace_id as structured metadata, which schema v13 allows.
+
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  log_level: warn
+
+common:
+  instance_addr: 127.0.0.1
+  path_prefix: /loki
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+
+schema_config:
+  configs:
+    - from: 2026-01-01
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+limits_config:
+  retention_period: 72h
+  # The labels are service, env and level, set by Alloy, and nothing else. Loki
+  # would add service_name copied from service, and a detected_level next to
+  # level: the same facts twice, under names the dashboards do not use.
+  discover_service_name: []
+  discover_log_levels: false
+
+analytics:
+  reporting_enabled: false

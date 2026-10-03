@@ -1,0 +1,48 @@
+# api-gateway: the single entry point. Verifies the token, limits the rate,
+# proxies to the services behind it. No database, no consumers.
+
+image:
+  name: api-gateway
+
+port: 8000
+replicas: 2
+
+# Every request of the platform passes through the gateway, so its load is the
+# load of the platform.
+hpa:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 5
+
+env:
+  AUTH_URL: http://auth:8001
+  CATALOG_URL: http://catalog:8002
+  BOOKING_URL: http://booking:8003
+  NOTIFICATION_URL: http://notification:8004
+  # The Ingress controller is the one proxy in front of the gateway: the
+  # address of the caller is the last one it appends to X-Forwarded-For.
+  # Anything to the left of it came from the client and is not trusted.
+  TRUSTED_PROXY_HOPS: "1"
+
+# The one way into the platform from outside the cluster.
+ingress:
+  enabled: true
+  host: barber.local
+
+# Nothing secret: no database, and Redis has no password in this cluster.
+secret:
+  enabled: false
+
+# Every request of the platform passes through it, and most of its time is
+# spent waiting on the services behind it.
+resources:
+  requests:
+    cpu: 200m
+    memory: 192Mi
+  limits:
+    cpu: "1"
+    memory: 384Mi
+
+# No schema of its own.
+migrations:
+  enabled: false

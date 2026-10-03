@@ -1,0 +1,25 @@
+{{- if .Values.ingress.enabled }}
+# The way into the cluster from outside. Only the gateway has one: every other
+# service is reached through it, with the token checked and the rate limited.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "service.name" . }}
+  labels:
+    {{- include "service.labels" . | nindent 4 }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  rules:
+    - host: {{ required "ingress.host is required when the ingress is enabled" .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "service.name" . }}
+                port:
+                  name: http
+{{- end }}

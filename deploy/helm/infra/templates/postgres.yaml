@@ -1,0 +1,114 @@
+{{- $p := .Values.postgres -}}
+{{- if not $p.existingSecret }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "infra.postgresSecret" . }}
+  labels:
+    {{- include "infra.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  POSTGRES_PASSWORD: {{ required "postgres.passwords.postgres" $p.passwords.postgres | quote }}
+  AUTH_DB_PASSWORD: {{ required "postgres.passwords.auth" $p.passwords.auth | quote }}
+  CATALOG_DB_PASSWORD: {{ required "postgres.passwords.catalog" $p.passwords.catalog | quote }}
+  BOOKING_DB_PASSWORD: {{ required "postgres.passwords.booking" $p.passwords.booking | quote }}
+  NOTIFICATION_DB_PASSWORD: {{ required "postgres.passwords.notification" $p.passwords.notification | quote }}
+---
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init
+  labels:
+    {{- include "infra.labels" . | nindent 4 }}
+data:
+  # The same file the compose stack mounts.
+  init-databases.sh: |-
+    {{- .Files.Get "files/init-databases.sh" | nindent 4 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  labels:
+    app.kubernetes.io/name: postgres
+    {{- include "infra.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/name: postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  labels:
+    app.kubernetes.io/name: postgres
+    {{- include "infra.labels" . | nindent 4 }}
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres
+        {{- include "infra.labels" . | nindent 8 }}
+      annotations:
+        # A changed init script means a database to create again; the pod has
+        # no volume, so a restart is exactly that.
+        checksum/init: {{ .Files.Get "files/init-databases.sh" | sha256sum }}
+    spec:
+      enableServiceLinks: false
+      automountServiceAccountToken: false
+      containers:
+        - name: postgres
+          image: {{ $p.image }}
+          args: ["-c", "max_connections={{ $p.maxConnections }}"]
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              value: postgres
+            - name: POSTGRES_DB
+              value: postgres
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          envFrom:
+            - secretRef:
+                name: {{ include "infra.postgresSecret" . }}
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres", "-h", "127.0.0.1"]
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres", "-h", "127.0.0.1"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml $p.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+      volumes:
+        # Local by design: the data dies with the pod.
+        - name: data
+          emptyDir: {}
+        - name: init
+          configMap:
+            name: postgres-init
+            # Executable: the entrypoint runs a .sh it can execute and sources
+            # one it cannot, and a sourced "set -e" would leak into it.
+            defaultMode: 0555

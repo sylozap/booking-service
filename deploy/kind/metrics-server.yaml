@@ -1,0 +1,16 @@
+# metrics-server for kind, the source of CPU usage for the autoscalers of the
+# gateway and booking (scripts/kind_up.sh).
+#
+# The kubelet of kind serves a self-signed certificate that does not name the
+# node, so it is not verified. Acceptable on a cluster that exists on one
+# laptop; nowhere else.
+args:
+  - --kubelet-insecure-tls
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 250m
+    memory: 128Mi

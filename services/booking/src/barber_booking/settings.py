@@ -41,6 +41,10 @@ class BookingSettings(BaseAppSettings):
     reminder_scheduler_interval_seconds: float = 60.0
     reminder_scheduler_batch_size: int = 100
 
+    # How often the time booked over the week ahead is summed for the business
+    # dashboard. More often than the scrape tells Prometheus nothing new.
+    booked_time_interval_seconds: float = 60.0
+
     # Availability is cached far shorter than the catalog: it changes whenever
     # anyone books, and a minute is the staleness a client can be shown.
     availability_cache_ttl_seconds: int = 60

@@ -13,5 +13,5 @@ disallow_untyped_defs = false
 disallow_untyped_decorators = false
 
 [[tool.mypy.overrides]]
-module = ["testcontainers.*", "docker.*", "aiokafka.*"]
+module = ["testcontainers.*", "docker.*", "aiokafka.*", "asyncpg.*"]
 ignore_missing_imports = true

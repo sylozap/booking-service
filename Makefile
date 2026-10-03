@@ -9,8 +9,31 @@ COMPOSE_OBS_FILE := deploy/compose/docker-compose.obs.yml
 SIGNING_KEY := deploy/compose/secrets/auth-signing-key.pem
 COMPOSE := docker compose -f $(COMPOSE_FILE)
 COMPOSE_WITH_OBS := docker compose -f $(COMPOSE_FILE) -f $(COMPOSE_OBS_FILE)
+OBS_CONTAINERS := prometheus grafana tempo loki alloy alertmanager
+# The same images as docker-compose.obs.yml: the rules are checked by the
+# promtool of the Prometheus that will load them.
+PROMETHEUS_IMAGE := prom/prometheus:v3.5.0
+ALERTMANAGER_IMAGE := prom/alertmanager:v0.28.1
+OBSERVABILITY_DIR := deploy/observability
+# The charts, and the Kubernetes the rendered manifests are validated against:
+# the version of the node image of kind.
+SERVICE_CHART := deploy/helm/service
+INFRA_CHART := deploy/helm/infra
+OBSERVABILITY_CHART := deploy/helm/observability
+HELM_VALUES := deploy/helm/values
+HELM_SERVICES := api-gateway auth catalog booking notification
+KUBERNETES_VERSION := 1.37.0
+# The ServiceMonitor and the PrometheusRule are resources of the Prometheus
+# Operator, which the schemas of Kubernetes do not know; their schemas come
+# from the community catalog of CRDs.
+CRD_SCHEMAS := https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json
+KUBECONFORM := kubeconform -strict -summary -kubernetes-version $(KUBERNETES_VERSION) \
+	-schema-location default -schema-location '$(CRD_SCHEMAS)'
+# Rendered as in a cluster that has the operator, so the ServiceMonitor is
+# validated too.
+WITH_OPERATOR := --api-versions monitoring.coreos.com/v1/ServiceMonitor
 
-.PHONY: help sync hooks check lint format type test test-unit keys up up-obs down logs migrate seed kind-up kind-down clean
+.PHONY: help sync hooks check lint format type test test-unit alerts-check helm-check keys up infra-up infra-down infra-check kind-obs-up kind-grafana obs-up obs-down down logs migrate seed kind-up kind-down clean
 
 help: ## Show available commands
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -48,6 +71,34 @@ test: ## Run the whole test suite
 test-unit: ## Run only the tests that need no Docker
 	@$(UV) run pytest -m "not integration"; status=$$?; test $$status -eq 0 -o $$status -eq 5
 
+alerts-check: ## Check the alerting rules, run their unit tests, check the routing
+	docker run --rm -v "$(CURDIR)/$(OBSERVABILITY_DIR):/rules:ro" -w /rules/alerts \
+		--entrypoint promtool $(PROMETHEUS_IMAGE) check rules rules.yaml
+	docker run --rm -v "$(CURDIR)/$(OBSERVABILITY_DIR):/rules:ro" -w /rules/alerts \
+		--entrypoint promtool $(PROMETHEUS_IMAGE) test rules rules.test.yaml
+	docker run --rm -v "$(CURDIR)/$(OBSERVABILITY_DIR):/rules:ro" \
+		--entrypoint amtool $(ALERTMANAGER_IMAGE) check-config /rules/alertmanager.yaml
+
+helm-check: ## Lint the Helm charts and validate what they render for every service
+	@for service in $(HELM_SERVICES); do \
+		for overlay in "" "$(HELM_VALUES)/local.yaml"; do \
+			echo "==> $$service $${overlay:+with $$overlay}"; \
+			files="-f $(HELM_VALUES)/common.yaml -f $(HELM_VALUES)/$$service.yaml $${overlay:+-f $$overlay}"; \
+			helm lint --strict $(SERVICE_CHART) $$files --set image.tag=check --quiet || exit 1; \
+			helm template $$service $(SERVICE_CHART) --namespace barber $$files --set image.tag=check \
+				$(WITH_OPERATOR) | $(KUBECONFORM) - || exit 1; \
+		done; \
+	done
+	@echo "==> infra"
+	@helm lint --strict $(INFRA_CHART) --quiet
+	@helm template infra $(INFRA_CHART) --namespace barber-infra | $(KUBECONFORM) -
+	@# The chart links the shared files of deploy/observability, and helm says
+	@# so about every link; that is the design, not news.
+	@echo "==> observability"
+	@helm lint --strict $(OBSERVABILITY_CHART) --quiet 2> >(grep -v "found symbolic link" >&2)
+	@helm template observability $(OBSERVABILITY_CHART) --namespace observability \
+		2> >(grep -v "found symbolic link" >&2) | $(KUBECONFORM) -
+
 keys: $(SIGNING_KEY) ## Generate the local RS256 signing key of auth, if absent
 
 # Never regenerated over an existing file: the kid is derived from the key, so
@@ -66,13 +117,22 @@ up: keys ## Start the local environment
 	@test -f $(COMPOSE_FILE) || { echo "$(COMPOSE_FILE) not found"; exit 1; }
 	$(COMPOSE) up -d --build
 
-up-obs: keys ## Start the local environment together with the observability profile
+obs-up: keys ## Start the local environment with Prometheus, Alertmanager, Grafana, Tempo, Loki and Alloy
 	@test -f $(COMPOSE_FILE) || { echo "$(COMPOSE_FILE) not found"; exit 1; }
 	$(COMPOSE_WITH_OBS) up -d --build
+	@echo "Grafana: http://localhost:3000  Prometheus: http://localhost:9090"
+
+# The services are brought up again from the main file alone: that recreates
+# them with tracing off, instead of leaving them exporting to a Tempo that is gone.
+obs-down: ## Stop the observability profile, keep the local environment running
+	$(COMPOSE_WITH_OBS) rm --stop --force $(OBS_CONTAINERS)
+	$(COMPOSE) up -d
 
 down: ## Stop the local environment
 	@test -f $(COMPOSE_FILE) || { echo "$(COMPOSE_FILE) not found"; exit 1; }
-	$(COMPOSE) down -v
+	@# The containers of the observability profile belong to the same project,
+	@# and without --remove-orphans they would outlive the stack.
+	$(COMPOSE) down -v --remove-orphans
 
 logs: ## Follow the local environment logs
 	@test -f $(COMPOSE_FILE) || { echo "$(COMPOSE_FILE) not found"; exit 1; }
@@ -82,17 +142,36 @@ migrate: ## Apply database migrations of every service
 	@test -x scripts/migrate.sh || { echo "scripts/migrate.sh not found"; exit 1; }
 	./scripts/migrate.sh
 
-seed: ## Load demo data into the local environment
-	@test -x scripts/seed.sh || { echo "scripts/seed.sh not found"; exit 1; }
-	./scripts/seed.sh
+# Signs in as the first administrator of docker-compose.yml, whose throwaway
+# password is the default here; SEED_ADMIN_PASSWORD in the environment wins.
+seed: ## Load demo data into the local environment through the API of the services
+	SEED_ADMIN_PASSWORD=$${SEED_ADMIN_PASSWORD:-admin-local-password-1} $(UV) run python scripts/seed.py
 
-kind-up: ## Create the kind cluster and install the Helm releases
-	@test -x scripts/kind-up.sh || { echo "scripts/kind-up.sh not found"; exit 1; }
-	./scripts/kind-up.sh
+infra-up: ## Install PostgreSQL, Redis and Kafka into the current cluster, create the topics
+	./scripts/infra_up.sh
 
-kind-down: ## Delete the kind cluster
-	@test -x scripts/kind-down.sh || { echo "scripts/kind-down.sh not found"; exit 1; }
-	./scripts/kind-down.sh
+infra-down: ## Remove the infrastructure from the current cluster, with everything it held
+	helm uninstall infra --namespace barber-infra --ignore-not-found
+
+infra-check: ## Check in the cluster that every role reaches its own database and no other
+	./scripts/check_db_isolation.sh
+
+kind-obs-up: ## Install Prometheus, Alertmanager, Grafana, Tempo, Loki and Alloy into the current cluster
+	./scripts/obs_up.sh
+
+# localhost:3000, as in the compose stack: the links of the alerts point there.
+kind-grafana: ## Open Grafana of the cluster on http://localhost:3000 (port-forward, Ctrl+C to stop)
+	kubectl port-forward --namespace observability service/monitoring-grafana 3000:80
+
+# OBSERVABILITY=1 adds Prometheus, Grafana, Tempo, Loki and Alloy: about a
+# gigabyte more (README, "Kubernetes в kind"), which a machine with 8 GB lacks.
+OBSERVABILITY ?= 0
+
+kind-up: ## The whole platform in kind, seeded; OBSERVABILITY=1 to add metrics, traces and logs
+	OBSERVABILITY=$(OBSERVABILITY) ./scripts/kind_up.sh
+
+kind-down: ## Delete the kind cluster with everything in it
+	kind delete cluster --name barber
 
 clean: ## Remove build and test artefacts
 	find . -type d -name __pycache__ -prune -exec rm -rf {} +

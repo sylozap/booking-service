@@ -1,0 +1,27 @@
+# catalog: salons, masters, services. Mostly reads, cached in Redis.
+
+image:
+  name: catalog
+
+port: 8002
+replicas: 2
+
+env: {}
+
+secret:
+  enabled: true
+  keys:
+    - DATABASE_DSN
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 192Mi
+  limits:
+    cpu: 500m
+    memory: 384Mi
+
+consumes: []
+
+migrations:
+  enabled: true

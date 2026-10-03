@@ -1,0 +1,9 @@
+apiVersion: v2
+name: service
+description: >-
+  One chart for every service of the platform. A service is a values file in
+  deploy/helm/values, never a copy of these templates: five copies drift apart.
+type: application
+version: 0.1.0
+appVersion: "1"
+kubeVersion: ">=1.30.0-0"
