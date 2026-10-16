@@ -11,6 +11,7 @@ from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from barber_common.cache import Cache, cache_from_dsn
+from barber_common.http.circuit_breaker import CircuitBreaker
 
 pytestmark = pytest.mark.integration
 
@@ -137,3 +138,54 @@ class _ClientThatFails:
 
     def __init__(self, on_get: object) -> None:
         self.get = on_get
+
+
+class _FlakyRedis:
+    """Counts the calls that reach it; fails them until told to recover."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.down = True
+
+    async def get(self, _key: str) -> bytes | None:
+        self.calls += 1
+        if self.down:
+            raise RedisTimeoutError("Timeout connecting to server")
+        return b"value"
+
+
+def cache_over(redis: _FlakyRedis, clock: list[float]) -> Cache:
+    breaker = CircuitBreaker(
+        name="redis", failure_threshold=3, reset_timeout_seconds=5.0, clock=lambda: clock[0]
+    )
+    return Cache(redis, ttl_seconds=60, breaker=breaker)  # type: ignore[arg-type]
+
+
+async def test_a_redis_that_keeps_failing_is_left_alone() -> None:
+    """Found by stopping Redis under load: every operation paid its timeout.
+
+    An availability query makes four, and booking and catalog spent their CPU
+    and their database connections waiting on a cache that was not there.
+    """
+    redis, clock = _FlakyRedis(), [0.0]
+    cache = cache_over(redis, clock)
+
+    misses = [await cache.get("test:key") for _ in range(10)]
+
+    assert misses == [None] * 10
+    assert redis.calls == 3
+
+
+async def test_redis_is_tried_again_once_the_breaker_resets() -> None:
+    redis, clock = _FlakyRedis(), [0.0]
+    cache = cache_over(redis, clock)
+    for _ in range(3):
+        await cache.get("test:key")
+
+    redis.down = False
+    clock[0] = 5.0
+    first = await cache.get("test:key")
+    second = await cache.get("test:key")
+
+    assert (first, second) == (b"value", b"value")
+    assert redis.calls == 5

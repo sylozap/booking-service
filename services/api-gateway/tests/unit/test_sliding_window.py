@@ -1,14 +1,17 @@
-"""The arithmetic of the sliding window counter, without Redis."""
+"""The arithmetic of the sliding window counter, and its failures, without Redis."""
 
 from __future__ import annotations
 
 import pytest
+from redis.exceptions import TimeoutError as RedisTimeoutError
 from starlette.requests import Request
 
+from barber_common.http.circuit_breaker import CircuitBreaker
 from barber_gateway.rate_limit import (
     Limit,
     LimitScope,
     RateLimitPolicy,
+    SlidingWindowLimiter,
     client_address,
     retry_after_seconds,
     sliding_estimate,
@@ -117,3 +120,29 @@ def test_more_trusted_hops_than_entries_falls_back_to_the_first_one() -> None:
     address = client_address(_request("10.0.0.2", "203.0.113.9"), trusted_proxy_hops=5)
 
     assert address == "203.0.113.9"
+
+
+class _StoppedRedis:
+    """Counts the scripts that reach it, and times out on each."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def eval(self, *_args: object) -> list[int]:
+        self.calls += 1
+        raise RedisTimeoutError("Timeout connecting to server")
+
+
+async def test_a_stopped_redis_is_left_alone_and_requests_go_through() -> None:
+    """Found by stopping Redis under load: every request waited out the timeout."""
+    redis = _StoppedRedis()
+    limiter = SlidingWindowLimiter(
+        redis,  # type: ignore[arg-type]
+        breaker=CircuitBreaker(name="redis", failure_threshold=3, reset_timeout_seconds=5.0),
+    )
+    limit = Limit(LimitScope.USER, 120, 60)
+
+    decisions = [await limiter.hit(limit, "user-1") for _ in range(10)]
+
+    assert all(decision.allowed for decision in decisions)
+    assert redis.calls == 3

@@ -20,7 +20,9 @@ replicas are a few milliseconds apart at most, and a test can move it.
 does not refuse: on this platform availability matters more than protection
 from a burst -- a stand without Redis is slower, not closed. The failure is a
 ``WARNING`` in the log, at most once per ``_FAILURE_LOG_INTERVAL_SECONDS``, so
-an outage of Redis does not turn into a flood of identical records.
+an outage of Redis does not turn into a flood of identical records. A circuit
+breaker, the one the cache uses, stops asking a Redis that keeps failing:
+otherwise every request of an outage would wait out the timeout first.
 """
 
 from __future__ import annotations
@@ -35,6 +37,8 @@ from redis.asyncio import Redis
 from redis.exceptions import RedisError
 from starlette.requests import Request
 
+from barber_common.cache import cache_breaker
+from barber_common.http.circuit_breaker import CircuitBreaker, CircuitState
 from barber_common.logging import get_logger
 
 __all__ = [
@@ -139,10 +143,12 @@ class SlidingWindowLimiter:
         *,
         clock: Callable[[], float] = time.time,
         key_prefix: str = "ratelimit",
+        breaker: CircuitBreaker | None = None,
     ) -> None:
         self._redis = redis
         self._clock = clock
         self._key_prefix = key_prefix
+        self._breaker = breaker or cache_breaker()
         self._last_failure_logged_at: float | None = None
 
     @classmethod
@@ -156,7 +162,7 @@ class SlidingWindowLimiter:
 
     async def hit(self, limit: Limit, subject: str) -> Decision:
         """Count one request of ``subject`` against ``limit``, if it fits."""
-        if self._redis is None:
+        if self._redis is None or self._breaker.state is CircuitState.OPEN:
             return Decision(allowed=True)
 
         window_ms = limit.window_seconds * 1000
@@ -178,8 +184,10 @@ class SlidingWindowLimiter:
                 2 * window_ms,
             )
         except _FAILURES as error:
+            self._breaker.record_failure()
             self._report_failure(error)
             return Decision(allowed=True)
+        self._breaker.record_success()
 
         if admitted:
             return Decision(allowed=True)
