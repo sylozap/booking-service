@@ -10,6 +10,7 @@ from __future__ import annotations
 from sqlalchemy.exc import DBAPIError
 
 __all__ = [
+    "SQLSTATE_CHARACTER_NOT_IN_REPERTOIRE",
     "SQLSTATE_CHECK_VIOLATION",
     "SQLSTATE_EXCLUSION_VIOLATION",
     "SQLSTATE_FOREIGN_KEY_VIOLATION",
@@ -24,6 +25,9 @@ SQLSTATE_UNIQUE_VIOLATION = "23505"
 SQLSTATE_EXCLUSION_VIOLATION = "23P01"
 SQLSTATE_FOREIGN_KEY_VIOLATION = "23503"
 SQLSTATE_CHECK_VIOLATION = "23514"
+# Text the database cannot store: in UTF8, the NUL character, which JSON allows
+# in a string as \u0000.
+SQLSTATE_CHARACTER_NOT_IN_REPERTOIRE = "22021"
 
 
 def sqlstate_of(error: DBAPIError) -> str | None:

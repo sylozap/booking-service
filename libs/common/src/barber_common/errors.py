@@ -15,11 +15,13 @@ from typing import ClassVar
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy.exc import DBAPIError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from barber_common.context import get_correlation_id
+from barber_common.db.errors import SQLSTATE_CHARACTER_NOT_IN_REPERTOIRE, sqlstate_of
 from barber_common.logging import get_logger
 
 __all__ = [
@@ -276,6 +278,33 @@ async def _http_exception_handler(request: Request, exc: Exception) -> Response:
     )
 
 
+async def _database_error_handler(request: Request, exc: Exception) -> Response:
+    """Text the database refuses to store is the client's mistake, not ours.
+
+    A NUL character is valid JSON and valid in a Python string, so it passes
+    every schema, and PostgreSQL refuses it only when the statement runs. Every
+    other database error is what it was: an internal error.
+    """
+    if not isinstance(exc, DBAPIError) or (
+        sqlstate_of(exc) != SQLSTATE_CHARACTER_NOT_IN_REPERTOIRE
+    ):
+        return await _unhandled_error_handler(request, exc)
+
+    detail = "The text contains a character that cannot be stored, such as NUL"
+    _log_problem(request, ValidationFailed.http_status, ValidationFailed.code, detail)
+    return _problem_response(
+        ValidationFailed.http_status,
+        problem_document(
+            code=ValidationFailed.code,
+            status=ValidationFailed.http_status,
+            title=ValidationFailed.title,
+            detail=detail,
+            instance=request.url.path,
+            extra={"violations": []},
+        ),
+    )
+
+
 async def _unhandled_error_handler(request: Request, exc: Exception) -> Response:
     """Last resort: the traceback goes to the log, the client gets a code."""
     _logger.error(
@@ -303,6 +332,7 @@ def install_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(DomainError, _domain_error_handler)
     app.add_exception_handler(RequestValidationError, _validation_error_handler)
     app.add_exception_handler(StarletteHTTPException, _http_exception_handler)
+    app.add_exception_handler(DBAPIError, _database_error_handler)
     app.add_exception_handler(Exception, _unhandled_error_handler)
 
 
@@ -344,11 +374,16 @@ def describe_problem_responses(document: dict[str, object]) -> None:
     ``application/json``, and an error declared by ``responses=`` with no body
     at all. Neither is what leaves the service. Every ``4xx`` and ``5xx``
     becomes a ``problem+json`` of :class:`Problem`, keeping its description.
+
+    An operation with a body also documents ``400``: FastAPI answers it, not
+    ``422``, to a body it cannot even decode -- bytes that are not UTF-8.
     """
     for operation in _operations(document):
         responses = operation.get("responses")
         if not isinstance(responses, dict):
             continue
+        if "requestBody" in operation:
+            responses.setdefault("400", {"description": "The body cannot be decoded"})
         for status, response in responses.items():
             if str(status)[:1] in {"4", "5"} and isinstance(response, dict):
                 description = response.get("description")

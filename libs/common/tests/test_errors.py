@@ -8,6 +8,7 @@ import httpx
 import pytest
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+from sqlalchemy.exc import DBAPIError
 
 from barber_common.context import bind_context
 from barber_common.errors import (
@@ -27,6 +28,14 @@ class SlotAlreadyTaken(DomainError):
     code = "slot_taken"
     http_status = 409
     title = "Slot is already taken"
+
+
+class DriverError(Exception):
+    """What the asyncpg dialect raises: an error that carries a SQLSTATE."""
+
+    def __init__(self, sqlstate: str) -> None:
+        super().__init__(f"SQLSTATE {sqlstate}")
+        self.sqlstate = sqlstate
 
 
 class Booking(BaseModel):
@@ -56,6 +65,10 @@ def build_app() -> FastAPI:
     @app.get("/missing")
     async def missing() -> None:
         raise HTTPException(status_code=404, detail="Booking not found")
+
+    @app.get("/database/{sqlstate}")
+    async def database(sqlstate: str) -> None:
+        raise DBAPIError("UPDATE salons SET name = $1", ("a\x00b",), DriverError(sqlstate))
 
     @app.post("/bookings")
     async def create(booking: Booking) -> dict[str, str]:
@@ -195,3 +208,44 @@ async def test_the_openapi_document_describes_errors_as_they_are_sent() -> None:
     assert "Problem" in schemas
     assert "HTTPValidationError" not in schemas
     assert "ValidationError" not in schemas
+
+
+async def test_an_undecodable_body_is_a_documented_400(client: httpx.AsyncClient) -> None:
+    app = build_app()
+    document_problem_responses(app)
+
+    response = await client.post(
+        "/bookings", content=b"\x80\x81", headers={"Content-Type": "application/json"}
+    )
+    responses = app.openapi()["paths"]["/bookings"]["post"]["responses"]
+
+    assert response.status_code == 400
+    assert response.headers["content-type"].startswith(PROBLEM_CONTENT_TYPE)
+    assert set(responses["400"]["content"]) == {PROBLEM_CONTENT_TYPE}
+
+
+def test_an_operation_without_a_body_documents_no_400() -> None:
+    app = build_app()
+    document_problem_responses(app)
+
+    responses = app.openapi()["paths"]["/taken"]["get"]["responses"]
+
+    assert "400" not in responses
+
+
+async def test_text_the_database_cannot_store_is_the_clients_mistake(
+    client: httpx.AsyncClient,
+) -> None:
+    """Found by the fuzzer: a NUL in a string reached PostgreSQL and answered 500."""
+    response = await client.get("/database/22021")
+
+    assert response.status_code == 422
+    assert response.headers["content-type"].startswith(PROBLEM_CONTENT_TYPE)
+    assert response.json()["code"] == "validation_error"
+
+
+async def test_any_other_database_error_stays_internal(client: httpx.AsyncClient) -> None:
+    response = await client.get("/database/08006")
+
+    assert response.status_code == 500
+    assert response.json()["code"] == "internal_error"
