@@ -15,13 +15,15 @@ logsNamespace: barber
 # compose stack run the same software (tests/deploy/test_observability_chart.py).
 tempo:
   image: grafana/tempo:2.8.2
+  # The limit holds a block being written (files/tempo.yaml cuts it at 100 MB)
+  # with room for the queries of Grafana.
   resources:
     requests:
       cpu: 50m
-      memory: 128Mi
+      memory: 256Mi
     limits:
       cpu: 500m
-      memory: 512Mi
+      memory: 1Gi
 
 loki:
   image: grafana/loki:3.5.5

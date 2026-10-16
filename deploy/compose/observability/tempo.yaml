@@ -17,6 +17,14 @@ distributor:
         http:
           endpoint: 0.0.0.0:4318
 
+# A block is cut at 100 MB or five minutes, whichever comes first. The
+# defaults, 500 MB and thirty minutes, keep that much of the traces in memory:
+# at the peak load of the platform -- 50 requests a second, a dozen spans each
+# -- Tempo outgrew its limit and was OOM-killed over and over.
+ingester:
+  max_block_bytes: 100000000
+  max_block_duration: 5m
+
 storage:
   trace:
     backend: local
