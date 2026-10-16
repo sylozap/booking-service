@@ -33,7 +33,7 @@ KUBECONFORM := kubeconform -strict -summary -kubernetes-version $(KUBERNETES_VER
 # validated too.
 WITH_OPERATOR := --api-versions monitoring.coreos.com/v1/ServiceMonitor
 
-.PHONY: help sync hooks check lint format type test test-unit alerts-check helm-check keys up infra-up infra-down infra-check kind-obs-up kind-grafana obs-up obs-down down logs migrate seed kind-up kind-down clean
+.PHONY: help sync hooks check lint format type test test-unit alerts-check helm-check keys up infra-up infra-down infra-check kind-obs-up kind-grafana obs-up obs-down down logs migrate seed kind-up kind-down loadtest-users loadtest clean
 
 help: ## Show available commands
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -172,6 +172,13 @@ kind-up: ## The whole platform in kind, seeded; OBSERVABILITY=1 to add metrics, 
 
 kind-down: ## Delete the kind cluster with everything in it
 	kind delete cluster --name barber
+
+loadtest-users: ## Register and confirm the clients of the load test in kind (loadtest/k6/users.json)
+	./scripts/loadtest.sh users
+
+# RATE, RAMP and HOLD change the profile: make loadtest RATE=20 HOLD=1m
+loadtest: ## Run the k6 scenario against kind; fails when an SLO is missed
+	./scripts/loadtest.sh run
 
 clean: ## Remove build and test artefacts
 	find . -type d -name __pycache__ -prune -exec rm -rf {} +

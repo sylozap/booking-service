@@ -34,3 +34,8 @@ htmlcov/
 
 # OS
 .DS_Store
+
+# The clients of the load test and the reports of its runs: credentials and
+# numbers of one stand.
+/loadtest/k6/users.json
+/loadtest/k6/results/
