@@ -12,21 +12,14 @@ of it and create nothing.
 
 from __future__ import annotations
 
-import asyncio
-import socket
 from collections import defaultdict
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
 import pytest
 import pytest_asyncio
-import uvicorn
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
-from fastapi import FastAPI
 from pydantic import SecretStr
 from seed import BOOKING_DAYS, Report, SeedSettings, seed
 
@@ -41,6 +34,7 @@ from barber_catalog.settings import ALEMBIC_INI as CATALOG_ALEMBIC_INI
 from barber_catalog.settings import CatalogSettings
 from barber_common.config import Environment
 from barber_common.testing.fixtures import apply_migrations, create_database
+from barber_common.testing.servers import free_port, private_key_pem, serve
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio(loop_scope="module")]
 
@@ -50,43 +44,6 @@ ADMIN_PASSWORD = "admin-password-of-the-test-1"
 BOOKING_CLIENT_SECRET = "booking-secret-of-the-test"
 # Statuses that hold the time of a master: the partial EXCLUDE constraint.
 ACTIVE = {"pending", "confirmed", "completed", "no_show"}
-
-
-def free_port() -> int:
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        port: int = probe.getsockname()[1]
-        return port
-
-
-def private_key_pem() -> str:
-    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    return key.private_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PrivateFormat.PKCS8,
-        encryption_algorithm=serialization.NoEncryption(),
-    ).decode("ascii")
-
-
-@dataclass
-class Running:
-    servers: list[uvicorn.Server]
-    tasks: list[asyncio.Task[None]]
-
-
-async def serve(apps: dict[int, FastAPI]) -> Running:
-    """Start each application on its port and wait until all of them listen."""
-    servers = [
-        uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
-        for port, app in apps.items()
-    ]
-    tasks = [asyncio.create_task(server.serve()) for server in servers]
-    async with asyncio.timeout(60):
-        while not all(server.started for server in servers):
-            if any(task.done() for task in tasks):
-                [task.result() for task in tasks if task.done()]
-            await asyncio.sleep(0.1)
-    return Running(servers, tasks)
 
 
 @pytest.fixture(scope="module")
@@ -159,7 +116,7 @@ async def platform(
     # with a token they cannot verify yet.
     first = await serve({ports["auth"]: auth})
     rest = await serve({ports["catalog"]: catalog, ports["booking"]: booking})
-    running = Running(first.servers + rest.servers, first.tasks + rest.tasks)
+    running = first + rest
 
     yield SeedSettings(
         auth_url=url["auth"],
@@ -170,9 +127,7 @@ async def platform(
         ready_timeout_seconds=60,
     )
 
-    for server in running.servers:
-        server.should_exit = True
-    await asyncio.gather(*running.tasks)
+    await running.stop()
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="module")
