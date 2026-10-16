@@ -315,6 +315,31 @@ async def test_a_salon_admin_changes_a_service_of_their_salon(
     assert response.json()["base_price"] == "4000.00"
 
 
+@pytest.mark.parametrize("field", ["name", "base_duration_min", "base_price", "currency"])
+async def test_a_field_with_no_empty_value_refuses_null(
+    app: FastAPI,
+    authorize: AuthorizationFactory,
+    make_salon: SalonFactory,
+    make_service: ServiceFactory,
+    field: str,
+) -> None:
+    """Found by the fuzzer: null reached a NOT NULL column and answered 500."""
+    salon = await make_salon()
+    service = await make_service(salon_id=salon.id)
+    headers = authorize(roles=(("salon_admin", salon.id),))
+
+    async with app_client(app) as client:
+        refused = await client.patch(
+            f"{SERVICES}/{service.id}", json={field: None}, headers=headers
+        )
+        cleared = await client.patch(
+            f"{SERVICES}/{service.id}", json={"description": None}, headers=headers
+        )
+
+    assert refused.status_code == 422
+    assert cleared.status_code == 200
+
+
 async def test_a_salon_admin_cannot_change_a_service_of_another_salon(
     app: FastAPI,
     authorize: AuthorizationFactory,

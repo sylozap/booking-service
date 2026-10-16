@@ -266,6 +266,66 @@ async def test_a_field_sent_as_null_is_cleared(
     assert response.json()["description"] is None
 
 
+@pytest.mark.parametrize(
+    "field",
+    [
+        "name",
+        "address",
+        "city",
+        "phone",
+        "timezone",
+        "slot_step_min",
+        "booking_min_lead_min",
+        "booking_horizon_days",
+        "cancel_deadline_min",
+        "is_active",
+    ],
+)
+async def test_a_field_with_no_empty_value_refuses_null(
+    app: FastAPI,
+    authorize: AuthorizationFactory,
+    make_salon: SalonFactory,
+    field: str,
+) -> None:
+    """Found by the fuzzer: null reached a NOT NULL column and answered 500."""
+    salon = await make_salon(name="Original")
+    headers = authorize(roles=(("super_admin", None),))
+
+    async with app_client(app) as client:
+        response = await client.patch(f"{SALONS}/{salon.id}", json={field: None}, headers=headers)
+        unchanged = await client.get(f"{SALONS}/{salon.id}")
+
+    assert response.status_code == 422
+    assert unchanged.json()["name"] == "Original"
+
+
+@pytest.mark.parametrize("field", ["booking_min_lead_min", "cancel_deadline_min"])
+async def test_a_policy_longer_than_a_month_is_refused(
+    app: FastAPI,
+    authorize: AuthorizationFactory,
+    make_salon: SalonFactory,
+    field: str,
+) -> None:
+    """Found by the fuzzer: a number past INTEGER overflowed the column into 500."""
+    salon = await make_salon()
+    headers = authorize(roles=(("super_admin", None),))
+
+    async with app_client(app) as client:
+        changed = await client.patch(
+            f"{SALONS}/{salon.id}", json={field: 30 * 24 * 60}, headers=headers
+        )
+        refused = await client.patch(
+            f"{SALONS}/{salon.id}", json={field: 2_332_067_635}, headers=headers
+        )
+        created = await client.post(
+            SALONS, json=a_salon(**{field: 30 * 24 * 60 + 1}), headers=headers
+        )
+
+    assert changed.status_code == 200
+    assert refused.status_code == 422
+    assert created.status_code == 422
+
+
 async def test_changing_a_salon_that_does_not_exist(
     app: FastAPI,
     authorize: AuthorizationFactory,

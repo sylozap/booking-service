@@ -227,6 +227,30 @@ async def test_a_salon_admin_changes_a_master_of_their_salon(
     assert response.json()["display_name"] == "Ivan P."
 
 
+async def test_the_name_of_a_master_refuses_null_and_the_rest_is_cleared(
+    app: FastAPI,
+    authorize: AuthorizationFactory,
+    make_salon: SalonFactory,
+    make_master: MasterFactory,
+) -> None:
+    salon = await make_salon()
+    master = await make_master(salon_id=salon.id)
+    headers = authorize(roles=(("salon_admin", salon.id),))
+
+    async with app_client(app) as client:
+        refused = await client.patch(
+            f"{MASTERS}/{master.id}", json={"display_name": None}, headers=headers
+        )
+        cleared = await client.patch(
+            f"{MASTERS}/{master.id}",
+            json={"bio": None, "photo_url": None, "specialization": None},
+            headers=headers,
+        )
+
+    assert refused.status_code == 422
+    assert cleared.status_code == 200
+
+
 async def test_a_salon_admin_cannot_change_a_master_of_another_salon(
     app: FastAPI,
     authorize: AuthorizationFactory,

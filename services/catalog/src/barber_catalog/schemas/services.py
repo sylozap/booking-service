@@ -8,6 +8,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from barber_catalog.schemas.partial import Kept
+
 __all__ = ["ServiceCreateRequest", "ServiceResponse", "ServiceUpdateRequest"]
 
 # ISO 4217. Fixed length rather than a free string: a currency written three
@@ -39,6 +41,9 @@ class ServiceCreateRequest(BaseModel):
 class ServiceUpdateRequest(BaseModel):
     """A change to a service. Absent fields are left alone.
 
+    ``null`` clears ``description``; every other field has no empty value and
+    refuses it.
+
     ``is_archived`` is not here: withdrawing a service is
     ``POST /api/v1/services/{id}/archive``, which is one thing with one meaning
     rather than a flag that can be flipped back and forth by an ordinary edit.
@@ -46,11 +51,11 @@ class ServiceUpdateRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    name: str | None = Field(default=None, min_length=1, max_length=200)
+    name: Kept[str] = Field(default=None, min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=5000)
-    base_duration_min: int | None = Field(default=None, gt=0, le=24 * 60)
-    base_price: Decimal | None = Field(default=None, ge=0, max_digits=10, decimal_places=2)
-    currency: str | None = Field(default=None, pattern=CURRENCY_PATTERN)
+    base_duration_min: Kept[int] = Field(default=None, gt=0, le=24 * 60)
+    base_price: Kept[Decimal] = Field(default=None, ge=0, max_digits=10, decimal_places=2)
+    currency: Kept[str] = Field(default=None, pattern=CURRENCY_PATTERN)
 
 
 class ServiceResponse(BaseModel):

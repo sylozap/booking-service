@@ -6,6 +6,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from barber_catalog.schemas.partial import Kept
+
 # The answers are shared contracts: the gateway reads the card of a master, see
 # barber_common.contracts.catalog.
 __all__ = ["MasterCreateRequest", "MasterUpdateRequest"]
@@ -33,12 +35,13 @@ class MasterUpdateRequest(BaseModel):
     """A change to a profile. Absent fields are left alone.
 
     ``salon_id`` and ``user_id`` cannot be changed. ``is_active`` is changed only
-    through the deactivate and activate endpoints.
+    through the deactivate and activate endpoints. ``null`` clears ``bio``,
+    ``photo_url`` and ``specialization``; ``display_name`` refuses it.
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    display_name: str | None = Field(default=None, min_length=1, max_length=200)
+    display_name: Kept[str] = Field(default=None, min_length=1, max_length=200)
     bio: str | None = Field(default=None, max_length=5000)
     photo_url: str | None = Field(default=None, max_length=1000)
     specialization: str | None = Field(default=None, max_length=200)
