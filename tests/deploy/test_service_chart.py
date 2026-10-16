@@ -297,7 +297,7 @@ COMMON = VALUES / "common.yaml"
 LOCAL = VALUES / "local.yaml"
 SERVICES = ("api-gateway", "auth", "catalog", "booking", "notification")
 # The services whose load follows the traffic (docs/10-infrastructure.md).
-AUTOSCALED = ("api-gateway", "booking")
+AUTOSCALED = ("api-gateway", "booking", "catalog")
 TAG = "0123abc"
 
 SETTINGS = {

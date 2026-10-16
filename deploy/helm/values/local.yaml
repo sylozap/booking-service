@@ -32,9 +32,9 @@ resources:
     cpu: 500m
     memory: 384Mi
 
-# The two autoscaled services, the gateway and booking, keep two pods and may
-# grow to three. Two, not one: the pods of the path every request takes must
-# survive the loss of one of them, a pod killed or rolled out, without a
+# The autoscaled services -- the gateway, booking and catalog -- keep two pods
+# and may grow to three. Two, not one: the pods of the path every request takes
+# must survive the loss of one of them, a pod killed or rolled out, without a
 # single error to the client.
 hpa:
   minReplicas: 2
