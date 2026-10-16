@@ -19,6 +19,8 @@ single service can see:
 
 from __future__ import annotations
 
+import json
+import re
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -190,6 +192,17 @@ def test_every_error_is_documented_as_a_problem_document(document: dict[str, Any
     ]
 
     assert wrong == []
+
+
+def test_no_schema_promises_a_time_with_an_offset(document: dict[str, Any]) -> None:
+    """``format: time`` is RFC 3339 full-time, offset included.
+
+    The times of the platform are wall-clock times without one; a schema that
+    says ``time`` is broken by every answer. Found by the fuzzer.
+    """
+    formats = re.findall(r'"format":\s*"([^"]+)"', json.dumps(document))
+
+    assert "time" not in formats
 
 
 def test_the_routing_table_sends_each_path_to_the_service_that_describes_it(

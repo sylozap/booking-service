@@ -8,10 +8,10 @@ availability.
 from __future__ import annotations
 
 from datetime import date, time
-from typing import Self
+from typing import Annotated, Self
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, WithJsonSchema, model_validator
 
 from barber_booking.domain.schedule import ExceptionKind
 
@@ -32,6 +32,22 @@ __all__ = [
 MAX_INTERVALS = 70
 MAX_BUFFER_MIN = 240
 
+# A wall-clock time as the API writes it, "10:00:00". Not the "format: time"
+# pydantic would publish: that is the full-time of RFC 3339, which requires an
+# offset, and a time of a schedule has none by design -- so every answer would
+# break its own schema.
+LocalTime = Annotated[
+    time,
+    WithJsonSchema(
+        {
+            "type": "string",
+            "pattern": r"^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d(\.\d{1,6})?)?$",
+            "description": "Wall-clock time of the salon, HH:MM[:SS], without an offset.",
+            "examples": ["10:00"],
+        }
+    ),
+]
+
 
 def _check_local(*moments: time | None) -> None:
     if any(moment is not None and moment.tzinfo is not None for moment in moments):
@@ -44,8 +60,8 @@ class WorkingInterval(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     weekday: int = Field(ge=0, le=6, description="0 is Monday, 6 is Sunday.")
-    start_time: time
-    end_time: time
+    start_time: LocalTime
+    end_time: LocalTime
 
     @model_validator(mode="after")
     def _ends_after_it_starts(self) -> Self:
@@ -93,8 +109,8 @@ class ScheduleExceptionRequest(BaseModel):
 
     effective_on: date
     kind: ExceptionKind
-    start_time: time | None = None
-    end_time: time | None = None
+    start_time: LocalTime | None = None
+    end_time: LocalTime | None = None
     reason: str | None = Field(default=None, max_length=500)
 
     @model_validator(mode="after")
@@ -115,8 +131,8 @@ class ScheduleExceptionResponse(BaseModel):
     id: UUID
     effective_on: date
     kind: ExceptionKind
-    start_time: time | None
-    end_time: time | None
+    start_time: LocalTime | None
+    end_time: LocalTime | None
     reason: str | None
 
 
