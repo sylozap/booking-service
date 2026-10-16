@@ -451,7 +451,7 @@ def test_local_runs_one_replica_of_the_image_built_for_compose(
     container = container_of(deployment)
 
     assert replica_range(render_service(service, local=True)) == (
-        (1, 3) if service in AUTOSCALED else (1, 1)
+        (2, 3) if service in AUTOSCALED else (1, 1)
     )
     assert container["image"] == f"barber/{service}:local"
     assert container["imagePullPolicy"] == "Never"

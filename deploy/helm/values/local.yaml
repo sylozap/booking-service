@@ -32,10 +32,12 @@ resources:
     cpu: 500m
     memory: 384Mi
 
-# The two autoscaled services start from one pod as well and may grow to
-# three: enough to watch the autoscaler work, few enough to fit.
+# The two autoscaled services, the gateway and booking, keep two pods and may
+# grow to three. Two, not one: the pods of the path every request takes must
+# survive the loss of one of them, a pod killed or rolled out, without a
+# single error to the client.
 hpa:
-  minReplicas: 1
+  minReplicas: 2
   maxReplicas: 3
 
 # kind runs Traefik as its Ingress controller (scripts/kind_up.sh).
