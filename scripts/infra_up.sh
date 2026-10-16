@@ -3,9 +3,10 @@
 #
 # Creates the three namespaces and the secrets (scripts/gen_secrets.sh),
 # installs PostgreSQL, Redis and Kafka into barber-infra and waits for them,
-# then creates the topics. The services and
-# observability are installed separately: on a machine short of memory the
-# namespaces come up one at a time.
+# then creates the topics. The log of Kafka is on a volume, so a broker stopped
+# and started again keeps its topics and the offsets of the consumers. The
+# services and observability are installed separately: on a machine short of
+# memory the namespaces come up one at a time.
 #
 # Idempotent: a second run upgrades the release to the same state and leaves
 # existing topics alone.
@@ -27,6 +28,7 @@ done
 helm upgrade --install infra deploy/helm/infra \
     --namespace "${INFRA_NAMESPACE}" \
     --set postgres.existingSecret=postgres-credentials \
+    --set kafka.persistence.enabled=true \
     --wait --timeout 5m
 
 # --wait covers a Deployment, not the pods of a StatefulSet being Ready.

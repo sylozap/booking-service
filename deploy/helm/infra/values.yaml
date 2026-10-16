@@ -1,10 +1,11 @@
 # The infrastructure of the platform in a cluster, installed into its own
 # namespace (barber-infra) by scripts/infra_up.sh.
 #
-# Local by design: one replica of everything and no persistent volumes. A pod
-# restarted is a pod emptied -- the databases are created again by the init
-# script, and the topics by scripts/create_topics.sh. What was written is gone;
-# the stand is rebuilt, not repaired.
+# Local by design: one replica of everything and no persistent volumes, but for
+# the log of Kafka when asked for (kafka.persistence). A pod restarted is a pod
+# emptied -- the databases are created again by the init script, and the
+# topics by scripts/create_topics.sh. What was written is gone; the stand is
+# rebuilt, not repaired.
 
 postgres:
   # The image of the compose stack.
@@ -58,6 +59,16 @@ kafka:
   # instead of an error.
   autoCreateTopics: false
   heap: -Xms256m -Xmx512m
+  # A volume for the log. Off, the log is an emptyDir and a broker that is
+  # stopped -- "kubectl scale statefulset kafka --replicas=0" -- comes back
+  # with no topics and no committed offsets. scripts/infra_up.sh turns it on
+  # in kind (its local-path provisioner backs the claim), so a stopped broker
+  # is an outage the platform rides out and not a lost disk.
+  persistence:
+    enabled: false
+    size: 2Gi
+    # Empty: the default StorageClass of the cluster.
+    storageClass: ""
   resources:
     requests:
       cpu: 200m

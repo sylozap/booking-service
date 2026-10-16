@@ -103,8 +103,24 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /var/lib/kafka/data
+  {{- if $k.persistence.enabled }}
+  # The log outlives the pod: a broker stopped and started again comes back
+  # with its topics, its messages and the offsets of every consumer group.
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- with $k.persistence.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $k.persistence.size }}
+  {{- else }}
       volumes:
-        # Local by design: the log dies with the pod, and the outbox of every
-        # service still holds what was not yet delivered.
+        # The log dies with the pod, and the outbox of every service still
+        # holds what was not yet delivered.
         - name: data
           emptyDir: {}
+  {{- end }}

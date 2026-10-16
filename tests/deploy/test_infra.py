@@ -34,12 +34,12 @@ SERVICES = ("auth", "catalog", "booking", "notification")
 Manifest = dict[str, Any]
 
 
-def render() -> list[Manifest]:
+def render(*options: str) -> list[Manifest]:
     helm = shutil.which("helm")
     if helm is None:
         pytest.skip("helm is not on PATH; CI installs it")
     result = subprocess.run(  # noqa: S603
-        [helm, "template", "infra", str(CHART), "--namespace", "barber-infra"],
+        [helm, "template", "infra", str(CHART), "--namespace", "barber-infra", *options],
         capture_output=True,
         text=True,
         check=True,
@@ -117,6 +117,28 @@ def test_postgres_runs_the_init_script_of_the_repository() -> None:
     ]
 
     assert init["data"]["init-databases.sh"] == INIT_SCRIPT.read_text().rstrip("\n")
+
+
+def test_kafka_keeps_its_log_in_an_empty_dir_by_default() -> None:
+    kafka = workload(render(), "kafka")
+
+    [volume] = kafka["spec"]["template"]["spec"]["volumes"]
+
+    assert volume == {"name": "data", "emptyDir": {}}
+    assert "volumeClaimTemplates" not in kafka["spec"]
+
+
+def test_kafka_with_persistence_keeps_its_log_on_a_claim() -> None:
+    kafka = workload(render("--set", "kafka.persistence.enabled=true"), "kafka")
+
+    [claim] = kafka["spec"]["volumeClaimTemplates"]
+    mounts = kafka["spec"]["template"]["spec"]["containers"][0]["volumeMounts"]
+
+    assert "volumes" not in kafka["spec"]["template"]["spec"]
+    assert claim["metadata"]["name"] == "data"
+    assert {"name": "data", "mountPath": "/var/lib/kafka/data"} in mounts
+    assert claim["spec"]["resources"]["requests"]["storage"] == "2Gi"
+    assert "storageClassName" not in claim["spec"]
 
 
 def test_postgres_accepts_the_connections_of_two_replicas_of_each_service() -> None:
