@@ -16,6 +16,7 @@ from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import TimeoutError as PoolTimeout
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
@@ -33,6 +34,7 @@ __all__ = [
     "NotFound",
     "Problem",
     "RateLimited",
+    "ServiceOverloaded",
     "Unauthorized",
     "ValidationFailed",
     "describe_problem_responses",
@@ -129,6 +131,19 @@ class RateLimited(DomainError):
     code = "rate_limited"
     http_status = 429
     title = "Too many requests"
+
+
+class ServiceOverloaded(DomainError):
+    """Every connection to the database is busy: too much at once, not a bug."""
+
+    code = "service_overloaded"
+    http_status = 503
+    title = "Service is overloaded"
+
+
+# How soon a client may try again after a 503 of an exhausted pool: the pool
+# frees up in the time a request takes, well under a second.
+OVERLOADED_RETRY_AFTER_SECONDS = 1
 
 
 class InternalError(DomainError):
@@ -305,6 +320,28 @@ async def _database_error_handler(request: Request, exc: Exception) -> Response:
     )
 
 
+async def _overloaded_handler(request: Request, exc: Exception) -> Response:
+    """No connection of the pool came free in time: the service is saturated.
+
+    A 500 would say the request is broken and alert as a bug; it is not, and
+    the same request a moment later succeeds -- which is what 503 with
+    Retry-After tells a client.
+    """
+    detail = "The service is busy, try again shortly"
+    _log_problem(request, ServiceOverloaded.http_status, ServiceOverloaded.code, detail)
+    return _problem_response(
+        ServiceOverloaded.http_status,
+        problem_document(
+            code=ServiceOverloaded.code,
+            status=ServiceOverloaded.http_status,
+            title=ServiceOverloaded.title,
+            detail=detail,
+            instance=request.url.path,
+        ),
+        {"Retry-After": str(OVERLOADED_RETRY_AFTER_SECONDS)},
+    )
+
+
 async def _unhandled_error_handler(request: Request, exc: Exception) -> Response:
     """Last resort: the traceback goes to the log, the client gets a code."""
     _logger.error(
@@ -333,6 +370,7 @@ def install_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(RequestValidationError, _validation_error_handler)
     app.add_exception_handler(StarletteHTTPException, _http_exception_handler)
     app.add_exception_handler(DBAPIError, _database_error_handler)
+    app.add_exception_handler(PoolTimeout, _overloaded_handler)
     app.add_exception_handler(Exception, _unhandled_error_handler)
 
 

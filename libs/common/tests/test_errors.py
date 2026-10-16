@@ -9,6 +9,7 @@ import pytest
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import TimeoutError as PoolTimeout
 
 from barber_common.context import bind_context
 from barber_common.errors import (
@@ -69,6 +70,10 @@ def build_app() -> FastAPI:
     @app.get("/database/{sqlstate}")
     async def database(sqlstate: str) -> None:
         raise DBAPIError("UPDATE salons SET name = $1", ("a\x00b",), DriverError(sqlstate))
+
+    @app.get("/saturated")
+    async def saturated() -> None:
+        raise PoolTimeout("QueuePool limit of size 10 overflow 5 reached")
 
     @app.post("/bookings")
     async def create(booking: Booking) -> dict[str, str]:
@@ -249,3 +254,12 @@ async def test_any_other_database_error_stays_internal(client: httpx.AsyncClient
 
     assert response.status_code == 500
     assert response.json()["code"] == "internal_error"
+
+
+async def test_an_exhausted_pool_is_an_overload_and_not_a_bug(client: httpx.AsyncClient) -> None:
+    """Found under three times the peak load: a saturated pool answered 500."""
+    response = await client.get("/saturated")
+
+    assert response.status_code == 503
+    assert response.headers["retry-after"] == "1"
+    assert response.json()["code"] == "service_overloaded"
