@@ -8,7 +8,8 @@
 # limit the gateway puts on registrations, and reads the confirmation letters
 # from the log of notification. "run" starts k6 from its image, on the network
 # of the host, so that it goes in through the Ingress as a browser would.
-# RATE, RAMP and HOLD change the profile; k6 options after "run" are passed on.
+# RATE, RAMP, HOLD and DAYS_AHEAD change the profile; k6 options after "run"
+# are passed on.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -51,6 +52,7 @@ run() {
         --volume "${PWD}/${K6_DIR}:/scripts" --workdir /scripts \
         --env BASE_URL="${BASE_URL:-http://barber.local}" \
         --env RATE="${RATE:-50}" --env RAMP="${RAMP:-2m}" --env HOLD="${HOLD:-5m}" \
+        --env DAYS_AHEAD="${DAYS_AHEAD:-13}" \
         --env SUMMARY="results/summary-${stamp}.json" \
         "${K6_IMAGE}" run "$@" booking_flow.js
 }

@@ -176,7 +176,7 @@ kind-down: ## Delete the kind cluster with everything in it
 loadtest-users: ## Register and confirm the clients of the load test in kind (loadtest/k6/users.json)
 	./scripts/loadtest.sh users
 
-# RATE, RAMP and HOLD change the profile: make loadtest RATE=20 HOLD=1m
+# RATE, RAMP, HOLD and DAYS_AHEAD change the profile: make loadtest RATE=20 HOLD=1m
 loadtest: ## Run the k6 scenario against kind; fails when an SLO is missed
 	./scripts/loadtest.sh run
 
